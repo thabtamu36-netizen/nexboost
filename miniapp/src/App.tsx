@@ -24,6 +24,16 @@ export default function App() {
   const [isTelegramContext, setIsTelegramContext] = useState(false);
   const [paymentStatus, setPaymentStatus] = useState<'pending' | 'approved' | 'rejected'>('pending');
   const [engagementAccepted, setEngagementAccepted] = useState(false);
+  const [screenshotFile, setScreenshotFile] = useState<File | null>(null);
+  const [screenshotPreview, setScreenshotPreview] = useState('');
+  const [screenshotError, setScreenshotError] = useState('');
+  const [transactionError, setTransactionError] = useState('');
+  const [paymentSubmission, setPaymentSubmission] = useState<{
+    transactionId: string;
+    method: string;
+    submittedAt: string;
+    screenshotName: string;
+  } | null>(null);
 
   const [timeLeft, setTimeLeft] = useState({ hours: 23, minutes: 54, seconds: 18 });
 
@@ -60,6 +70,23 @@ export default function App() {
     const storedStatus = localStorage.getItem('nexboost-payment-status');
     if (storedStatus === 'pending' || storedStatus === 'approved' || storedStatus === 'rejected') {
       setPaymentStatus(storedStatus);
+    }
+
+    const storedSubmission = localStorage.getItem('nexboost-payment-submission');
+    if (storedSubmission) {
+      try {
+        const parsed = JSON.parse(storedSubmission) as {
+          transactionId: string;
+          method: string;
+          submittedAt: string;
+          screenshotName: string;
+        };
+        setPaymentSubmission(parsed);
+        setTxnRef(parsed.transactionId);
+        setPaymentMethod(parsed.method);
+      } catch {
+        localStorage.removeItem('nexboost-payment-submission');
+      }
     }
   }, []);
 
@@ -176,6 +203,16 @@ export default function App() {
               goHome,
               engagementAccepted,
               setEngagementAccepted,
+              screenshotFile,
+              setScreenshotFile,
+              screenshotPreview,
+              setScreenshotPreview,
+              screenshotError,
+              setScreenshotError,
+              transactionError,
+              setTransactionError,
+              paymentSubmission,
+              setPaymentSubmission,
             })}
           </div>
 
@@ -201,9 +238,18 @@ function renderScreen(tabId: string, props: any) {
     case 'free_trial':
       return <ScreenFreeTrial {...props} />;
     case 'payment':
-      return <ScreenPayment {...props} engagementAccepted={props.engagementAccepted} setEngagementAccepted={props.setEngagementAccepted} />;
+      return <ScreenPayment {...props} />;
     case 'status':
-      return <ScreenPaymentStatus setActiveTab={props.setActiveTab} paymentStatus={props.paymentStatus} setPaymentStatus={props.setPaymentStatus} goBack={props.goBack} goHome={props.goHome} />;
+      return <ScreenPaymentStatus
+        setActiveTab={props.setActiveTab}
+        paymentStatus={props.paymentStatus}
+        paymentMethod={props.paymentMethod}
+        transactionId={props.txnRef}
+        paymentSubmission={props.paymentSubmission}
+        setPaymentStatus={props.setPaymentStatus}
+        goBack={props.goBack}
+        goHome={props.goHome}
+      />;
     case 'premium_dash':
       return <ScreenPremiumDashboard {...props} />;
     case 'expired':
@@ -296,23 +342,7 @@ function ScreenWelcome({
   );
 }
 
-function ValidationGate({ checked, onChange }: { checked: boolean; onChange: (value: boolean) => void }) {
-  return (
-    <label className="flex items-start gap-3 rounded-2xl border border-slate-700 bg-slate-900/70 p-3 text-[11px] text-slate-300">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        className="mt-0.5 h-4 w-4 rounded border-slate-600 bg-slate-950 accent-emerald-500"
-      />
-      <span>
-        I confirm I have read the setup flow and understand this DNS service is for my device only. I agree to proceed after confirming my details.
-      </span>
-    </label>
-  );
-}
-
-function ScreenPlans({ setActiveTab, engagementAccepted, setEngagementAccepted }: { setActiveTab: (tab: string) => void; engagementAccepted: boolean; setEngagementAccepted: (value: boolean) => void }) {
+function ScreenPlans({ setActiveTab }: { setActiveTab: (tab: string) => void }) {
   const [selectedPlan, setSelectedPlan] = useState('monthly');
 
   return (
@@ -407,19 +437,12 @@ function ScreenPlans({ setActiveTab, engagementAccepted, setEngagementAccepted }
         </div>
       </div>
 
-      <div className="mt-4 space-y-3">
-        <ValidationGate checked={engagementAccepted} onChange={setEngagementAccepted} />
-      </div>
-
       <button
         onClick={() => {
-          if (!engagementAccepted) return;
-          setEngagementAccepted(false);
           if (selectedPlan === 'trial') setActiveTab('free_trial');
           else setActiveTab('network');
         }}
-        disabled={!engagementAccepted}
-        className="mt-4 w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold text-xs uppercase tracking-wider hover:opacity-95 transition flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
+        className="mt-4 w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold text-xs uppercase tracking-wider hover:opacity-95 transition flex items-center justify-center gap-2"
       >
         <span>{selectedPlan === 'trial' ? 'Activate Free Trial' : 'Continue to Network Setup'}</span>
         <ArrowRight className="w-4 h-4" />
@@ -428,7 +451,7 @@ function ScreenPlans({ setActiveTab, engagementAccepted, setEngagementAccepted }
   );
 }
 
-function ScreenNetwork({ selectedNetwork, setSelectedNetwork, setActiveTab, engagementAccepted, setEngagementAccepted }: { selectedNetwork: string; setSelectedNetwork: (v: string) => void; setActiveTab: (tab: string) => void; engagementAccepted: boolean; setEngagementAccepted: (value: boolean) => void }) {
+function ScreenNetwork({ selectedNetwork, setSelectedNetwork, setActiveTab }: { selectedNetwork: string; setSelectedNetwork: (v: string) => void; setActiveTab: (tab: string) => void }) {
   return (
     <div className="flex-1 p-5 flex flex-col justify-between">
       <div>
@@ -494,35 +517,18 @@ function ScreenNetwork({ selectedNetwork, setSelectedNetwork, setActiveTab, enga
         </div>
       </div>
 
-      <div className="mt-4 space-y-3">
-        <ValidationGate checked={engagementAccepted} onChange={setEngagementAccepted} />
-      </div>
-
-      <div className="flex gap-2">
-        <button
-          onClick={() => setActiveTab('plans')}
-          className="w-1/3 py-3.5 rounded-xl bg-slate-800 text-slate-300 font-bold text-xs uppercase hover:bg-slate-700 transition"
-        >
-          Back
-        </button>
-        <button
-          onClick={() => {
-            if (!engagementAccepted) return;
-            setEngagementAccepted(false);
-            setActiveTab('device');
-          }}
-          disabled={!engagementAccepted}
-          className="w-2/3 py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold text-xs uppercase tracking-wider hover:opacity-95 transition flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <span>Select Device</span>
-          <ArrowRight className="w-4 h-4" />
-        </button>
-      </div>
+      <button
+        onClick={() => setActiveTab('device')}
+        className="mt-4 w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold text-xs uppercase tracking-wider hover:opacity-95 transition flex items-center justify-center gap-2"
+      >
+        <span>Select Device</span>
+        <ArrowRight className="w-4 h-4" />
+      </button>
     </div>
   );
 }
 
-function ScreenDevice({ selectedDevice, setSelectedDevice, setActiveTab, engagementAccepted, setEngagementAccepted }: { selectedDevice: string; setSelectedDevice: (v: string) => void; setActiveTab: (tab: string) => void; engagementAccepted: boolean; setEngagementAccepted: (value: boolean) => void }) {
+function ScreenDevice({ selectedDevice, setSelectedDevice, setActiveTab }: { selectedDevice: string; setSelectedDevice: (v: string) => void; setActiveTab: (tab: string) => void }) {
   return (
     <div className="flex-1 p-5 flex flex-col justify-between">
       <div>
@@ -579,30 +585,13 @@ function ScreenDevice({ selectedDevice, setSelectedDevice, setActiveTab, engagem
         </div>
       </div>
 
-      <div className="mt-4 space-y-3">
-        <ValidationGate checked={engagementAccepted} onChange={setEngagementAccepted} />
-      </div>
-
-      <div className="flex gap-2">
-        <button
-          onClick={() => setActiveTab('network')}
-          className="w-1/3 py-3.5 rounded-xl bg-slate-800 text-slate-300 font-bold text-xs uppercase hover:bg-slate-700 transition"
-        >
-          Back
-        </button>
-        <button
-          onClick={() => {
-            if (!engagementAccepted) return;
-            setEngagementAccepted(false);
-            setActiveTab('payment');
-          }}
-          disabled={!engagementAccepted}
-          className="w-2/3 py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold text-xs uppercase tracking-wider hover:opacity-95 transition flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <span>Proceed to Payment</span>
-          <ArrowRight className="w-4 h-4" />
-        </button>
-      </div>
+      <button
+        onClick={() => setActiveTab('payment')}
+        className="mt-4 w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold text-xs uppercase tracking-wider hover:opacity-95 transition flex items-center justify-center gap-2"
+      >
+        <span>Proceed to Payment</span>
+        <ArrowRight className="w-4 h-4" />
+      </button>
     </div>
   );
 }
@@ -713,8 +702,88 @@ function ScreenFreeTrial({ copiedDns, copyToClipboard, setupOs, setSetupOs, time
   );
 }
 
-function ScreenPayment({ paymentMethod, setPaymentMethod, txnRef, setTxnRef, setActiveTab, engagementAccepted, setEngagementAccepted }: any) {
+function ScreenPayment({
+  paymentMethod,
+  setPaymentMethod,
+  txnRef,
+  setTxnRef,
+  setActiveTab,
+  setPaymentStatus,
+  setPaymentSubmission,
+  screenshotFile,
+  setScreenshotFile,
+  screenshotPreview,
+  setScreenshotPreview,
+  screenshotError,
+  setScreenshotError,
+  transactionError,
+  setTransactionError,
+}: any) {
   const isValidated = txnRef.trim().length > 0;
+
+  const handleScreenshotChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    if (!file) {
+      setScreenshotFile(null);
+      setScreenshotPreview('');
+      setScreenshotError('A payment screenshot is required.');
+      return;
+    }
+
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (!allowedTypes.includes(file.type)) {
+      setScreenshotFile(null);
+      setScreenshotPreview('');
+      setScreenshotError('Please upload a JPG, JPEG, PNG, or WebP screenshot.');
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setScreenshotFile(null);
+      setScreenshotPreview('');
+      setScreenshotError('Screenshot must be smaller than 5MB.');
+      return;
+    }
+
+    setScreenshotFile(file);
+    setScreenshotPreview(URL.createObjectURL(file));
+    setScreenshotError('');
+  };
+
+  const handleSubmit = () => {
+    let valid = true;
+
+    if (!txnRef.trim()) {
+      setTransactionError('Transaction ID / Reference Number is required.');
+      valid = false;
+    } else {
+      setTransactionError('');
+    }
+
+    if (!screenshotFile) {
+      setScreenshotError('A payment screenshot is required.');
+      valid = false;
+    }
+
+    if (!valid) return;
+
+    const submission = {
+      transactionId: txnRef.trim(),
+      method: paymentMethod,
+      submittedAt: new Date().toISOString(),
+      screenshotName: screenshotFile?.name ?? 'payment-proof.png',
+    };
+
+    setPaymentSubmission(submission);
+    localStorage.setItem('nexboost-payment-submission', JSON.stringify(submission));
+    setPaymentStatus('pending');
+    localStorage.setItem('nexboost-payment-status', 'pending');
+    setActiveTab('status');
+  };
+
+  const paymentInstructions = paymentMethod === 'telebirr'
+    ? 'Open your Telebirr app and find your successful payment receipt. Copy the exact Transaction ID and enter it below. Upload a clear screenshot showing the transaction ID, amount, date, and successful payment status.'
+    : 'Open your CBE mobile banking app and find your successful transfer receipt. Copy the exact Transaction Reference Number and enter it below. Upload a clear screenshot showing the reference number, amount, date, and successful payment status.';
 
   return (
     <div className="flex-1 p-5 flex flex-col justify-between">
@@ -744,8 +813,8 @@ function ScreenPayment({ paymentMethod, setPaymentMethod, txnRef, setTxnRef, set
                 : 'bg-[#0f1422]/60 border-slate-800'
             }`}
           >
-            <div className="text-xs font-bold text-white">CBE Bank</div>
-            <div className="text-[9px] text-slate-400">Commercial Bank of Ethiopia</div>
+            <div className="text-xs font-bold text-white">CBE</div>
+            <div className="text-[9px] text-slate-400">Commercial Bank</div>
           </button>
         </div>
 
@@ -757,7 +826,7 @@ function ScreenPayment({ paymentMethod, setPaymentMethod, txnRef, setTxnRef, set
                 <span className="font-mono font-bold text-emerald-400">0907554351</span>
               </div>
               <div className="flex justify-between items-center text-xs">
-                <span className="text-slate-400">Account Receiver Name:</span>
+                <span className="text-slate-400">Receiver:</span>
                 <span className="font-bold text-slate-200">Roman</span>
               </div>
             </>
@@ -779,132 +848,180 @@ function ScreenPayment({ paymentMethod, setPaymentMethod, txnRef, setTxnRef, set
           </div>
         </div>
 
+        <div className="p-3 rounded-2xl bg-slate-900/60 border border-slate-800 text-[11px] text-slate-300 leading-relaxed mb-4">
+          {paymentInstructions}
+        </div>
+
+        <div className="mb-4 rounded-2xl border border-slate-800 bg-[#0b1020] p-3">
+          <div className="text-[10px] uppercase tracking-wider font-bold text-slate-400 mb-2">
+            Example receipt layout
+          </div>
+          <div className="rounded-xl border border-dashed border-slate-700 bg-slate-950/80 p-3 space-y-2">
+            <div className="flex justify-between text-[10px] text-slate-400">
+              <span>{paymentMethod === 'telebirr' ? 'Transaction ID' : 'Reference Number'}</span>
+              <span className="font-mono text-emerald-400">ABC123456</span>
+            </div>
+            <div className="flex justify-between text-[10px] text-slate-400">
+              <span>Amount</span>
+              <span className="text-slate-200">349.99 ETB</span>
+            </div>
+            <div className="flex justify-between text-[10px] text-slate-400">
+              <span>Date</span>
+              <span className="text-slate-200">2026-11-10</span>
+            </div>
+            <div className="text-[10px] text-emerald-400 font-bold">Successful payment status</div>
+          </div>
+        </div>
+
         <div className="space-y-2">
-          <label className="text-xs font-bold text-slate-300 block">Transaction Reference Number</label>
+          <label className="text-xs font-bold text-slate-300 block">
+            {paymentMethod === 'telebirr' ? 'Transaction ID' : 'Transaction Reference Number'}
+          </label>
           <input
             type="text"
-            placeholder="e.g. FT24098X71 or TXN98124"
+            placeholder={paymentMethod === 'telebirr' ? 'e.g. TXN987654321' : 'e.g. FT24098X71'}
             value={txnRef}
-            onChange={(e) => setTxnRef(e.target.value)}
+            onChange={(e) => {
+              setTxnRef(e.target.value);
+              if (e.target.value.trim()) setTransactionError('');
+            }}
             className="w-full bg-[#070a12] border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 font-mono"
           />
-          <p className="text-[10px] text-slate-500">Paste the reference code from your SMS confirmation for manual verification.</p>
+          {transactionError ? <p className="text-[10px] text-red-400">{transactionError}</p> : null}
+        </div>
+
+        <div className="mt-4 space-y-2">
+          <label className="text-xs font-bold text-slate-300 block">Payment Screenshot</label>
+          <input
+            type="file"
+            accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+            onChange={handleScreenshotChange}
+            className="block w-full text-[11px] text-slate-300 file:mr-3 file:rounded-xl file:border-0 file:bg-emerald-500/15 file:px-3 file:py-2 file:text-xs file:font-bold file:text-emerald-400"
+          />
+          {screenshotError ? <p className="text-[10px] text-red-400">{screenshotError}</p> : null}
+
+          {screenshotPreview ? (
+            <div className="mt-3 rounded-2xl border border-slate-800 bg-slate-950/70 p-2">
+              <div className="text-[10px] uppercase tracking-wider font-bold text-slate-400 mb-2">Screenshot preview</div>
+              <div className="relative overflow-hidden rounded-xl border border-slate-700">
+                <img src={screenshotPreview} alt="Payment proof preview" className="h-40 w-full object-cover" />
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setScreenshotFile(null);
+                  setScreenshotPreview('');
+                  setScreenshotError('A payment screenshot is required.');
+                }}
+                className="mt-2 text-[10px] font-bold text-cyan-400 underline"
+              >
+                Replace screenshot
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
 
-      <div className="mt-4 space-y-3">
-        <ValidationGate checked={engagementAccepted} onChange={setEngagementAccepted} />
-      </div>
-
       <button
-        onClick={() => {
-          if (!txnRef.trim() || !isValidated || !engagementAccepted) return;
-          setEngagementAccepted(false);
-          setActiveTab('status');
-        }}
-        disabled={!txnRef.trim() || !isValidated || !engagementAccepted}
-        className="mt-4 w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold text-xs uppercase tracking-wider hover:opacity-95 transition flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
+        onClick={handleSubmit}
+        className="mt-4 w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold text-xs uppercase tracking-wider hover:opacity-95 transition flex items-center justify-center gap-2"
       >
-        <span>Submit Payment For Approval</span>
+        <span>Submit Payment</span>
         <ArrowRight className="w-4 h-4" />
       </button>
     </div>
   );
 }
 
-function ScreenPaymentStatus({ setActiveTab }: { setActiveTab: (tab: string) => void }) {
-  const [statusState, setStatusState] = useState('pending');
+function ScreenPaymentStatus({
+  paymentStatus,
+  paymentMethod,
+  transactionId,
+  paymentSubmission,
+  setActiveTab,
+}: {
+  paymentStatus: 'pending' | 'approved' | 'rejected';
+  paymentMethod: string;
+  transactionId: string;
+  paymentSubmission?: { submittedAt?: string; transactionId?: string; method?: string } | null;
+  setActiveTab: (tab: string) => void;
+}) {
+  const displayMethod = paymentMethod === 'telebirr' ? 'Telebirr' : 'CBE';
+  const displayTransactionId = transactionId || paymentSubmission?.transactionId || 'Not available';
+  const submittedAt = paymentSubmission?.submittedAt ? new Date(paymentSubmission.submittedAt).toLocaleString() : 'Pending';
+
+  if (paymentStatus === 'approved') {
+    return (
+      <div className="flex-1 p-5 flex flex-col justify-between">
+        <div className="p-5 rounded-2xl bg-[#0f1524] border border-emerald-500/30 text-center flex flex-col items-center">
+          <div className="w-12 h-12 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center mb-3">
+            <CheckCircle2 className="w-6 h-6 text-emerald-400" />
+          </div>
+          <h3 className="text-sm font-bold text-white">Payment Approved</h3>
+          <p className="text-[11px] text-slate-400 mt-1 max-w-[240px]">Your subscription has been confirmed by the administrator.</p>
+          <button
+            onClick={() => setActiveTab('premium_dash')}
+            className="mt-4 px-4 py-2 rounded-xl bg-emerald-500 text-slate-950 font-bold text-xs hover:bg-emerald-400 transition"
+          >
+            Open DNS Dashboard
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (paymentStatus === 'rejected') {
+    return (
+      <div className="flex-1 p-5 flex flex-col justify-between">
+        <div className="p-5 rounded-2xl bg-[#0f1524] border border-red-500/30 text-center flex flex-col items-center">
+          <div className="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center mb-3">
+            <XCircle className="w-6 h-6 text-red-400" />
+          </div>
+          <h3 className="text-sm font-bold text-white">Payment Rejected</h3>
+          <p className="text-[11px] text-slate-400 mt-1 max-w-[240px]">Your payment was reviewed and rejected by the administrator. Please check the rejection reason and resubmit.</p>
+          <button
+            onClick={() => setActiveTab('payment')}
+            className="mt-4 px-4 py-2 rounded-xl bg-slate-800 text-slate-200 font-bold text-xs hover:bg-slate-700 transition"
+          >
+            Update Payment
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 p-5 flex flex-col justify-between">
-      <div>
-        <div className="flex bg-[#0f1422] p-1 rounded-xl border border-slate-800 mb-4">
-          <button
-            onClick={() => setStatusState('pending')}
-            className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg transition ${
-              statusState === 'pending' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40' : 'text-slate-400'
-            }`}
-          >
-            Pending
-          </button>
-          <button
-            onClick={() => setStatusState('approved')}
-            className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg transition ${
-              statusState === 'approved' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40' : 'text-slate-400'
-            }`}
-          >
-            Approved
-          </button>
-          <button
-            onClick={() => setStatusState('rejected')}
-            className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg transition ${
-              statusState === 'rejected' ? 'bg-red-500/20 text-red-400 border border-red-500/40' : 'text-slate-400'
-            }`}
-          >
-            Rejected
-          </button>
+      <div className="p-5 rounded-2xl bg-[#0f1524] border border-amber-500/30 flex flex-col items-center text-center">
+        <div className="w-12 h-12 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mb-3">
+          <Clock className="w-6 h-6 text-amber-400 animate-spin" />
         </div>
+        <h3 className="text-sm font-bold text-white">Pending Verification</h3>
+        <p className="text-[11px] text-slate-400 mt-2 max-w-[240px]">
+          Your payment has been submitted successfully. Our administrator will review your transaction and confirm your subscription shortly. Please wait for confirmation.
+        </p>
 
-        {statusState === 'pending' && (
-          <div className="p-5 rounded-2xl bg-[#0f1524] border border-amber-500/30 text-center flex flex-col items-center">
-            <div className="w-12 h-12 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mb-3">
-              <Clock className="w-6 h-6 text-amber-400 animate-spin" />
-            </div>
-            <h3 className="text-sm font-bold text-white">Payment Verification Pending</h3>
-            <p className="text-[11px] text-slate-400 mt-1 max-w-[240px]">
-              Admin is verifying transaction reference <code className="text-amber-400 font-mono">FT24098X71</code>.
-            </p>
-
-            <div className="mt-4 p-3 rounded-xl bg-slate-900/80 border border-slate-800 text-[10px] text-slate-400 w-full text-left space-y-1">
-              <div className="flex justify-between">
-                <span>Estimated Time:</span>
-                <span className="text-slate-200 font-bold">5 - 15 minutes</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Method:</span>
-                <span className="text-slate-200">Telebirr Merchant</span>
-              </div>
-            </div>
+        <div className="mt-4 w-full rounded-xl bg-slate-900/80 border border-slate-800 p-3 text-left space-y-2 text-[10px] text-slate-300">
+          <div className="flex justify-between gap-2">
+            <span className="text-slate-400">Status:</span>
+            <span className="font-bold text-amber-400">Pending</span>
           </div>
-        )}
-
-        {statusState === 'approved' && (
-          <div className="p-5 rounded-2xl bg-[#0f1524] border border-emerald-500/30 text-center flex flex-col items-center">
-            <div className="w-12 h-12 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center mb-3">
-              <CheckCircle2 className="w-6 h-6 text-emerald-400" />
-            </div>
-            <h3 className="text-sm font-bold text-white">Payment Approved!</h3>
-            <p className="text-[11px] text-slate-400 mt-1">Your 30-Day VIP Personal DNS credential has been generated.</p>
-            <button
-              onClick={() => setActiveTab('premium_dash')}
-              className="mt-4 px-4 py-2 rounded-xl bg-emerald-500 text-slate-950 font-bold text-xs hover:bg-emerald-400 transition"
-            >
-              Open Premium Dashboard
-            </button>
+          <div className="flex justify-between gap-2">
+            <span className="text-slate-400">Transaction ID:</span>
+            <span className="font-mono text-slate-200 break-all">{displayTransactionId}</span>
           </div>
-        )}
-
-        {statusState === 'rejected' && (
-          <div className="p-5 rounded-2xl bg-[#0f1524] border border-red-500/30 text-center flex flex-col items-center">
-            <div className="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center mb-3">
-              <XCircle className="w-6 h-6 text-red-400" />
-            </div>
-            <h3 className="text-sm font-bold text-white">Transaction Unverified</h3>
-            <p className="text-[11px] text-slate-400 mt-1 max-w-[240px]">
-              Reference number could not be matched with bank record. Please re-submit or contact support.
-            </p>
-
-            <button
-              onClick={() => setActiveTab('payment')}
-              className="mt-4 px-4 py-2 rounded-xl bg-slate-800 text-slate-200 font-bold text-xs hover:bg-slate-700 transition"
-            >
-              Retry Payment Submission
-            </button>
+          <div className="flex justify-between gap-2">
+            <span className="text-slate-400">Payment method:</span>
+            <span className="text-slate-200">{displayMethod}</span>
           </div>
-        )}
+          <div className="flex justify-between gap-2">
+            <span className="text-slate-400">Submitted:</span>
+            <span className="text-slate-200">{submittedAt}</span>
+          </div>
+        </div>
       </div>
 
-      <div className="text-center">
+      <div className="text-center mt-4">
         <a href="#support" className="text-[11px] text-cyan-400 hover:underline">Need Help? Contact NEXBOOST Telegram Support</a>
       </div>
     </div>

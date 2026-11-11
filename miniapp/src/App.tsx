@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Zap, Shield, Smartphone, Globe, Copy, Check, Clock, AlertTriangle, CheckCircle2, XCircle,
   CreditCard, ChevronRight, RefreshCw, Layers, User, Phone, Server, Send, ArrowRight, Eye,
-  Lock, ArrowLeft, Download, Monitor, Sparkles, Filter, ExternalLink, HelpCircle, CheckCircle, Search
+  Lock, ArrowLeft, Download, Monitor, Sparkles, Filter, ExternalLink, HelpCircle, CheckCircle, Search, Home
 } from 'lucide-react';
 
 type TelegramUser = {
@@ -22,8 +22,50 @@ export default function App() {
   const [setupOs, setSetupOs] = useState('android');
   const [telegramUser, setTelegramUser] = useState<TelegramUser | null>(null);
   const [isTelegramContext, setIsTelegramContext] = useState(false);
+  const [paymentStatus, setPaymentStatus] = useState<'pending' | 'approved' | 'rejected'>('pending');
+  const [engagementAccepted, setEngagementAccepted] = useState(false);
 
   const [timeLeft, setTimeLeft] = useState({ hours: 23, minutes: 54, seconds: 18 });
+
+  const goHome = () => {
+    setEngagementAccepted(false);
+    setActiveTab('welcome');
+  };
+
+  const goBack = () => {
+    setEngagementAccepted(false);
+    switch (activeTab) {
+      case 'status':
+        setActiveTab('payment');
+        break;
+      case 'payment':
+      case 'free_trial':
+        setActiveTab('plans');
+        break;
+      case 'network':
+        setActiveTab('plans');
+        break;
+      case 'device':
+        setActiveTab('network');
+        break;
+      case 'plans':
+      case 'premium_dash':
+      case 'expired':
+      default:
+        setActiveTab('welcome');
+    }
+  };
+
+  useEffect(() => {
+    const storedStatus = localStorage.getItem('nexboost-payment-status');
+    if (storedStatus === 'pending' || storedStatus === 'approved' || storedStatus === 'rejected') {
+      setPaymentStatus(storedStatus);
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('nexboost-payment-status', paymentStatus);
+  }, [paymentStatus]);
 
   useEffect(() => {
     const telegramWindow = window as Window & {
@@ -87,18 +129,26 @@ export default function App() {
           </div>
 
           <div className="mt-5 px-4 py-2 bg-[#17212b] rounded-t-2xl flex items-center justify-between border-b border-slate-800/80 z-40">
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] text-slate-400 font-medium">Back</span>
-            </div>
+            <button
+              onClick={goBack}
+              className="flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900/80 px-2 py-1 text-[10px] font-bold text-slate-200"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              Back
+            </button>
             <div className="flex flex-col items-center">
               <span className="text-xs font-bold text-white tracking-wide">NEXBOOST Bot</span>
               <span className="text-[9px] text-emerald-400 flex items-center gap-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" /> mini app
               </span>
             </div>
-            <div className="flex items-center gap-2">
-              <div className="w-5 h-5 rounded-full bg-slate-700/60 flex items-center justify-center text-[10px] text-slate-300">•••</div>
-            </div>
+            <button
+              onClick={goHome}
+              className="flex items-center gap-1 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-[10px] font-bold text-cyan-300"
+            >
+              <Home className="w-3.5 h-3.5" />
+              Home
+            </button>
           </div>
 
           <div className="flex-1 bg-[#0b0f19] text-slate-100 overflow-y-auto custom-scrollbar rounded-b-2xl relative flex flex-col">
@@ -120,6 +170,12 @@ export default function App() {
               telegramUser,
               isTelegramContext,
               telegramDisplayName,
+              paymentStatus,
+              setPaymentStatus,
+              goBack,
+              goHome,
+              engagementAccepted,
+              setEngagementAccepted,
             })}
           </div>
 
@@ -137,17 +193,17 @@ function renderScreen(tabId: string, props: any) {
     case 'welcome':
       return <ScreenWelcome setActiveTab={props.setActiveTab} telegramUser={props.telegramUser} isTelegramContext={props.isTelegramContext} telegramDisplayName={props.telegramDisplayName} />;
     case 'plans':
-      return <ScreenPlans setActiveTab={props.setActiveTab} />;
+      return <ScreenPlans setActiveTab={props.setActiveTab} engagementAccepted={props.engagementAccepted} setEngagementAccepted={props.setEngagementAccepted} />;
     case 'network':
-      return <ScreenNetwork selectedNetwork={props.selectedNetwork} setSelectedNetwork={props.setSelectedNetwork} setActiveTab={props.setActiveTab} />;
+      return <ScreenNetwork selectedNetwork={props.selectedNetwork} setSelectedNetwork={props.setSelectedNetwork} setActiveTab={props.setActiveTab} engagementAccepted={props.engagementAccepted} setEngagementAccepted={props.setEngagementAccepted} />;
     case 'device':
-      return <ScreenDevice selectedDevice={props.selectedDevice} setSelectedDevice={props.setSelectedDevice} setActiveTab={props.setActiveTab} />;
+      return <ScreenDevice selectedDevice={props.selectedDevice} setSelectedDevice={props.setSelectedDevice} setActiveTab={props.setActiveTab} engagementAccepted={props.engagementAccepted} setEngagementAccepted={props.setEngagementAccepted} />;
     case 'free_trial':
       return <ScreenFreeTrial {...props} />;
     case 'payment':
-      return <ScreenPayment {...props} />;
+      return <ScreenPayment {...props} engagementAccepted={props.engagementAccepted} setEngagementAccepted={props.setEngagementAccepted} />;
     case 'status':
-      return <ScreenPaymentStatus setActiveTab={props.setActiveTab} />;
+      return <ScreenPaymentStatus setActiveTab={props.setActiveTab} paymentStatus={props.paymentStatus} setPaymentStatus={props.setPaymentStatus} goBack={props.goBack} goHome={props.goHome} />;
     case 'premium_dash':
       return <ScreenPremiumDashboard {...props} />;
     case 'expired':
@@ -240,7 +296,23 @@ function ScreenWelcome({
   );
 }
 
-function ScreenPlans({ setActiveTab }: { setActiveTab: (tab: string) => void }) {
+function ValidationGate({ checked, onChange }: { checked: boolean; onChange: (value: boolean) => void }) {
+  return (
+    <label className="flex items-start gap-3 rounded-2xl border border-slate-700 bg-slate-900/70 p-3 text-[11px] text-slate-300">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-0.5 h-4 w-4 rounded border-slate-600 bg-slate-950 accent-emerald-500"
+      />
+      <span>
+        I confirm I have read the setup flow and understand this DNS service is for my device only. I agree to proceed after confirming my details.
+      </span>
+    </label>
+  );
+}
+
+function ScreenPlans({ setActiveTab, engagementAccepted, setEngagementAccepted }: { setActiveTab: (tab: string) => void; engagementAccepted: boolean; setEngagementAccepted: (value: boolean) => void }) {
   const [selectedPlan, setSelectedPlan] = useState('monthly');
 
   return (
@@ -335,12 +407,19 @@ function ScreenPlans({ setActiveTab }: { setActiveTab: (tab: string) => void }) 
         </div>
       </div>
 
+      <div className="mt-4 space-y-3">
+        <ValidationGate checked={engagementAccepted} onChange={setEngagementAccepted} />
+      </div>
+
       <button
         onClick={() => {
+          if (!engagementAccepted) return;
+          setEngagementAccepted(false);
           if (selectedPlan === 'trial') setActiveTab('free_trial');
           else setActiveTab('network');
         }}
-        className="mt-4 w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold text-xs uppercase tracking-wider hover:opacity-95 transition flex items-center justify-center gap-2"
+        disabled={!engagementAccepted}
+        className="mt-4 w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold text-xs uppercase tracking-wider hover:opacity-95 transition flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
       >
         <span>{selectedPlan === 'trial' ? 'Activate Free Trial' : 'Continue to Network Setup'}</span>
         <ArrowRight className="w-4 h-4" />
@@ -349,7 +428,7 @@ function ScreenPlans({ setActiveTab }: { setActiveTab: (tab: string) => void }) 
   );
 }
 
-function ScreenNetwork({ selectedNetwork, setSelectedNetwork, setActiveTab }: { selectedNetwork: string; setSelectedNetwork: (v: string) => void; setActiveTab: (tab: string) => void }) {
+function ScreenNetwork({ selectedNetwork, setSelectedNetwork, setActiveTab, engagementAccepted, setEngagementAccepted }: { selectedNetwork: string; setSelectedNetwork: (v: string) => void; setActiveTab: (tab: string) => void; engagementAccepted: boolean; setEngagementAccepted: (value: boolean) => void }) {
   return (
     <div className="flex-1 p-5 flex flex-col justify-between">
       <div>
@@ -415,6 +494,10 @@ function ScreenNetwork({ selectedNetwork, setSelectedNetwork, setActiveTab }: { 
         </div>
       </div>
 
+      <div className="mt-4 space-y-3">
+        <ValidationGate checked={engagementAccepted} onChange={setEngagementAccepted} />
+      </div>
+
       <div className="flex gap-2">
         <button
           onClick={() => setActiveTab('plans')}
@@ -423,8 +506,13 @@ function ScreenNetwork({ selectedNetwork, setSelectedNetwork, setActiveTab }: { 
           Back
         </button>
         <button
-          onClick={() => setActiveTab('device')}
-          className="w-2/3 py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold text-xs uppercase tracking-wider hover:opacity-95 transition flex items-center justify-center gap-2"
+          onClick={() => {
+            if (!engagementAccepted) return;
+            setEngagementAccepted(false);
+            setActiveTab('device');
+          }}
+          disabled={!engagementAccepted}
+          className="w-2/3 py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold text-xs uppercase tracking-wider hover:opacity-95 transition flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <span>Select Device</span>
           <ArrowRight className="w-4 h-4" />
@@ -434,7 +522,7 @@ function ScreenNetwork({ selectedNetwork, setSelectedNetwork, setActiveTab }: { 
   );
 }
 
-function ScreenDevice({ selectedDevice, setSelectedDevice, setActiveTab }: { selectedDevice: string; setSelectedDevice: (v: string) => void; setActiveTab: (tab: string) => void }) {
+function ScreenDevice({ selectedDevice, setSelectedDevice, setActiveTab, engagementAccepted, setEngagementAccepted }: { selectedDevice: string; setSelectedDevice: (v: string) => void; setActiveTab: (tab: string) => void; engagementAccepted: boolean; setEngagementAccepted: (value: boolean) => void }) {
   return (
     <div className="flex-1 p-5 flex flex-col justify-between">
       <div>
@@ -491,6 +579,10 @@ function ScreenDevice({ selectedDevice, setSelectedDevice, setActiveTab }: { sel
         </div>
       </div>
 
+      <div className="mt-4 space-y-3">
+        <ValidationGate checked={engagementAccepted} onChange={setEngagementAccepted} />
+      </div>
+
       <div className="flex gap-2">
         <button
           onClick={() => setActiveTab('network')}
@@ -499,8 +591,13 @@ function ScreenDevice({ selectedDevice, setSelectedDevice, setActiveTab }: { sel
           Back
         </button>
         <button
-          onClick={() => setActiveTab('payment')}
-          className="w-2/3 py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold text-xs uppercase tracking-wider hover:opacity-95 transition flex items-center justify-center gap-2"
+          onClick={() => {
+            if (!engagementAccepted) return;
+            setEngagementAccepted(false);
+            setActiveTab('payment');
+          }}
+          disabled={!engagementAccepted}
+          className="w-2/3 py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold text-xs uppercase tracking-wider hover:opacity-95 transition flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <span>Proceed to Payment</span>
           <ArrowRight className="w-4 h-4" />
@@ -616,7 +713,9 @@ function ScreenFreeTrial({ copiedDns, copyToClipboard, setupOs, setSetupOs, time
   );
 }
 
-function ScreenPayment({ paymentMethod, setPaymentMethod, txnRef, setTxnRef, setActiveTab }: any) {
+function ScreenPayment({ paymentMethod, setPaymentMethod, txnRef, setTxnRef, setActiveTab, engagementAccepted, setEngagementAccepted }: any) {
+  const isValidated = txnRef.trim().length > 0;
+
   return (
     <div className="flex-1 p-5 flex flex-col justify-between">
       <div>
@@ -693,9 +792,18 @@ function ScreenPayment({ paymentMethod, setPaymentMethod, txnRef, setTxnRef, set
         </div>
       </div>
 
+      <div className="mt-4 space-y-3">
+        <ValidationGate checked={engagementAccepted} onChange={setEngagementAccepted} />
+      </div>
+
       <button
-        onClick={() => setActiveTab('status')}
-        className="mt-4 w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold text-xs uppercase tracking-wider hover:opacity-95 transition flex items-center justify-center gap-2"
+        onClick={() => {
+          if (!txnRef.trim() || !isValidated || !engagementAccepted) return;
+          setEngagementAccepted(false);
+          setActiveTab('status');
+        }}
+        disabled={!txnRef.trim() || !isValidated || !engagementAccepted}
+        className="mt-4 w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold text-xs uppercase tracking-wider hover:opacity-95 transition flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
       >
         <span>Submit Payment For Approval</span>
         <ArrowRight className="w-4 h-4" />

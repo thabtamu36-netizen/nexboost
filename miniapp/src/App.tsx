@@ -12,6 +12,9 @@ type TelegramUser = {
   username?: string;
 };
 
+const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'https://backend-nexboost.onrender.com';
+const DEFAULT_PAYMENT_AMOUNT = 349.99;
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('welcome');
   const [selectedNetwork, setSelectedNetwork] = useState('ethio');
@@ -238,7 +241,7 @@ function renderScreen(tabId: string, props: any) {
     case 'free_trial':
       return <ScreenFreeTrial {...props} />;
     case 'payment':
-      return <ScreenPayment {...props} />;
+      return <ScreenPayment {...props} telegramUser={props.telegramUser} />;
     case 'status':
       return <ScreenPaymentStatus
         setActiveTab={props.setActiveTab}
@@ -718,8 +721,10 @@ function ScreenPayment({
   setScreenshotError,
   transactionError,
   setTransactionError,
+  telegramUser,
 }: any) {
   const isValidated = txnRef.trim().length > 0;
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleScreenshotChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0] ?? null;
@@ -750,7 +755,8 @@ function ScreenPayment({
     setScreenshotError('');
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
+    if (isSubmitting) return;
     let valid = true;
 
     if (!txnRef.trim()) {
@@ -767,6 +773,13 @@ function ScreenPayment({
 
     if (!valid) return;
 
+    const storedTelegramId = Number(localStorage.getItem('nexboost-telegram-id') ?? '0');
+    const telegramId = telegramUser?.id ?? storedTelegramId;
+    if (!Number.isInteger(telegramId) || telegramId <= 0) {
+      setTransactionError('Open NEXBOOST from the Telegram bot before submitting your payment.');
+      return;
+    }
+
     const submission = {
       transactionId: txnRef.trim(),
       method: paymentMethod,
@@ -774,8 +787,64 @@ function ScreenPayment({
       screenshotName: screenshotFile?.name ?? 'payment-proof.png',
     };
 
+    let proofUri: string | null = null;
+    try {
+      proofUri = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result ?? ''));
+        reader.onerror = () => reject(new Error('The payment screenshot could not be read. Please select it again.'));
+        reader.readAsDataURL(screenshotFile);
+      });
+    } catch (error) {
+      setScreenshotError(error instanceof Error ? error.message : 'The payment screenshot could not be read.');
+      return;
+    }
+    const paymentPayload = {
+      telegramId: telegramId || 0,
+      username: telegramUser?.username ?? null,
+      firstName: telegramUser?.first_name ?? null,
+      lastName: telegramUser?.last_name ?? null,
+      plan: 'Monthly VIP Pro',
+      amount: DEFAULT_PAYMENT_AMOUNT,
+      paymentMethod,
+      transactionRef: txnRef.trim(),
+      paymentProof: proofUri
+    };
+
+    setIsSubmitting(true);
+    setTransactionError('');
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 25_000);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/payments/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(paymentPayload),
+        signal: controller.signal
+      });
+
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload?.ok === false) {
+        throw new Error(payload?.error ?? 'Unable to send payment to the dashboard database.');
+      }
+    } catch (error) {
+      console.error('Payment submission failed:', error);
+      setTransactionError(
+        error instanceof DOMException && error.name === 'AbortError'
+          ? 'The payment server did not respond. Please check your connection and try again.'
+          : error instanceof Error
+          ? error.message
+          : 'Your payment could not be saved. Please try again.'
+      );
+      return;
+    } finally {
+      window.clearTimeout(timeoutId);
+      setIsSubmitting(false);
+    }
+
     setPaymentSubmission(submission);
     localStorage.setItem('nexboost-payment-submission', JSON.stringify(submission));
+    localStorage.setItem('nexboost-telegram-id', String(telegramUser?.id ?? localStorage.getItem('nexboost-telegram-id') ?? 0));
     setPaymentStatus('pending');
     localStorage.setItem('nexboost-payment-status', 'pending');
     setActiveTab('status');
@@ -924,9 +993,10 @@ function ScreenPayment({
 
       <button
         onClick={handleSubmit}
-        className="mt-4 w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold text-xs uppercase tracking-wider hover:opacity-95 transition flex items-center justify-center gap-2"
+        disabled={isSubmitting}
+        className="mt-4 w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold text-xs uppercase tracking-wider hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60 transition flex items-center justify-center gap-2"
       >
-        <span>Submit Payment</span>
+        <span>{isSubmitting ? 'Submitting Payment…' : 'Submit Payment'}</span>
         <ArrowRight className="w-4 h-4" />
       </button>
     </div>

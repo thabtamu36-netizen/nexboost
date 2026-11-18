@@ -204,6 +204,7 @@ export default function App() {
               timeLeft,
               setActiveTab,
               telegramUser,
+              telegramInitData,
               isTelegramContext,
               telegramDisplayName,
               paymentStatus,
@@ -247,7 +248,13 @@ function renderScreen(tabId: string, props: any) {
     case 'free_trial':
       return <ScreenFreeTrial {...props} />;
     case 'payment':
-      return <ScreenPayment {...props} telegramUser={props.telegramUser} />;
+      return (
+        <ScreenPayment
+          {...props}
+          telegramUser={props.telegramUser}
+          telegramInitData={props.telegramInitData}
+        />
+      );
     case 'status':
       return <ScreenPaymentStatus
         setActiveTab={props.setActiveTab}
@@ -728,6 +735,7 @@ function ScreenPayment({
   transactionError,
   setTransactionError,
   telegramUser,
+  telegramInitData,
 }: any) {
   const isValidated = txnRef.trim().length > 0;
   const [isSubmitting, setIsSubmitting] = useState(false);

@@ -24,6 +24,7 @@ export default function App() {
   const [txnRef, setTxnRef] = useState('');
   const [setupOs, setSetupOs] = useState('android');
   const [telegramUser, setTelegramUser] = useState<TelegramUser | null>(null);
+  const [telegramInitData, setTelegramInitData] = useState('');
   const [isTelegramContext, setIsTelegramContext] = useState(false);
   const [paymentStatus, setPaymentStatus] = useState<'pending' | 'approved' | 'rejected'>('pending');
   const [engagementAccepted, setEngagementAccepted] = useState(false);
@@ -101,6 +102,7 @@ export default function App() {
     const telegramWindow = window as Window & {
       Telegram?: {
         WebApp?: {
+          initData: string;
           ready: () => void;
           expand: () => void;
           initDataUnsafe?: {
@@ -118,6 +120,10 @@ export default function App() {
     setIsTelegramContext(true);
     webApp.ready();
     webApp.expand();
+
+     // Keep the signed authentication data in memory only.
+  setTelegramInitData(webApp.initData ?? '');
+
 
     const user = webApp.initDataUnsafe?.user ?? null;
     if (user) {
@@ -818,7 +824,10 @@ function ScreenPayment({
     try {
       const response = await fetch(`${API_BASE_URL}/api/payments/submit`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+       headers: {
+  'Content-Type': 'application/json',
+  'Authorization': `tma ${telegramInitData}`
+},
         body: JSON.stringify(paymentPayload),
         signal: controller.signal
       });
@@ -1342,5 +1351,3 @@ function ScreenAdmin() {
     </div>
   );
 }
-
-

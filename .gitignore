@@ -1,0 +1,27 @@
+# Environment secrets
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build output
+dist/
+**/dist/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+*.err
+
+# Local tools
+.vscode/

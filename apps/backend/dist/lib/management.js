@@ -81,7 +81,7 @@ async function syncUserToSupabase(user) {
     }
     try {
         const supabase = getSupabase();
-        await supabase.from('users').upsert({
+        const { error } = await supabase.from('users').upsert({
             id: user.id,
             telegram_id: user.telegram_id,
             username: user.username,
@@ -91,9 +91,11 @@ async function syncUserToSupabase(user) {
             created_at: user.created_at,
             updated_at: user.updated_at
         }, { onConflict: 'telegram_id' });
+        if (error)
+            throw new Error(error.message);
     }
-    catch {
-        // Ignore optional Supabase sync failures so the in-memory flow stays usable.
+    catch (error) {
+        throw error;
     }
 }
 async function syncPaymentToSupabase(payment) {
@@ -102,7 +104,7 @@ async function syncPaymentToSupabase(payment) {
     }
     try {
         const supabase = getSupabase();
-        await supabase.from('payments').upsert({
+        const { error } = await supabase.from('payments').upsert({
             id: payment.id,
             user_id: payment.user_id,
             amount: payment.amount,
@@ -113,11 +115,14 @@ async function syncPaymentToSupabase(payment) {
             approved_by: payment.approved_by,
             decision_note: payment.decision_note,
             transaction_ref: payment.transaction_ref,
+            plan: payment.plan,
             created_at: payment.submitted_at
         }, { onConflict: 'transaction_ref' });
+        if (error)
+            throw new Error(error.message);
     }
-    catch {
-        // Ignore optional Supabase sync failures so the in-memory flow stays usable.
+    catch (error) {
+        throw error;
     }
 }
 async function syncSubscriptionToSupabase(subscription) {
@@ -306,8 +311,8 @@ export async function updatePaymentDecision(paymentId, decision, adminId) {
         throw new Error('Payment not found.');
     }
     const payment = state.payments[paymentIndex];
-    if (payment.status === 'approved' && decision === 'approved') {
-        throw new Error('This payment was already approved.');
+    if (payment.status !== 'pending') {
+        throw new Error('This payment has already been processed.');
     }
     payment.status = decision;
     payment.approved_by = adminId;
@@ -346,13 +351,23 @@ export async function updatePaymentDecision(paymentId, decision, adminId) {
     state.activityLogs.push(activityLog);
     await syncPaymentToSupabase(payment);
     await syncActivityLogToSupabase(activityLog);
+    if (env.TELEGRAM_BOT_TOKEN && user.telegram_id) {
+        const text = decision === 'approved'
+            ? `Payment approved.\nPlan: ${payment.plan ?? 'subscription'}\nStart: ${state.subscriptions.find(s => s.user_id === user.id && s.status === 'active')?.start_date ?? ''}\nExpiry: ${state.subscriptions.find(s => s.user_id === user.id && s.status === 'active')?.expiry_date ?? ''}`
+            : 'Your payment was rejected.';
+        void fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: user.telegram_id, text })
+        });
+    }
     return {
         ok: true,
         payment,
         user
     };
 }
-export const notifyTelegramAdmins = async (message) => {
+export const notifyTelegramAdmins = async (message, paymentId) => {
     if (!env.TELEGRAM_BOT_TOKEN) {
         return { ok: false, reason: 'Telegram bot is not configured.' };
     }
@@ -360,6 +375,14 @@ export const notifyTelegramAdmins = async (message) => {
     if (adminIds.length === 0) {
         return { ok: false, reason: 'No admin chat IDs configured.' };
     }
+    const replyMarkup = paymentId
+        ? {
+            inline_keyboard: [[
+                    { text: 'Approve', callback_data: `approve:${paymentId}` },
+                    { text: 'Reject', callback_data: `reject:${paymentId}` }
+                ]]
+        }
+        : undefined;
     const requests = adminIds.map(async (chatId) => {
         const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
             method: 'POST',
@@ -367,7 +390,8 @@ export const notifyTelegramAdmins = async (message) => {
             body: JSON.stringify({
                 chat_id: chatId,
                 text: message,
-                parse_mode: 'HTML'
+                parse_mode: 'HTML',
+                reply_markup: replyMarkup
             })
         });
         return response.ok;

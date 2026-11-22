@@ -4,7 +4,7 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import { adminRouter } from './routes/admin.js';
 import { paymentsRouter } from './routes/payments.js';
-import { healthRouter } from './routes/health.js';
+import { telegramRouter } from './routes/telegram.js';
 export function createApp() {
     const app = express();
     app.use(cors({
@@ -18,7 +18,7 @@ export function createApp() {
     app.get('/health', (_req, res) => {
         res.status(200).json({ ok: true, service: 'NEXBOOST backend' });
     });
-    app.use('/api/health', healthRouter);
+    app.use('/api/telegram', telegramRouter);
     app.use('/api/payments', paymentsRouter);
     app.use('/api/admin', adminRouter);
     return app;

@@ -70,9 +70,17 @@ paymentsRouter.post('/submit', async (req, res) => {
     });
 
     if (!result.duplicate) {
-      await notifyTelegramAdmins(
-        `New payment submitted by @${telegramUser.username ?? 'customer'} for ${parsed.data.plan}.\nAmount: ${parsed.data.amount} ETB\nMethod: ${parsed.data.paymentMethod}\nReference: ${parsed.data.transactionRef}`
-      );
+      void notifyTelegramAdmins(
+        `New payment submitted by @${telegramUser.username ?? 'customer'} for ${parsed.data.plan}.\nAmount: ${parsed.data.amount} ETB\nMethod: ${parsed.data.paymentMethod}\nReference: ${parsed.data.transactionRef}`,
+        result.payment.id
+      ).catch(() => {
+        // Retry once after a short delay
+        setTimeout(() => {
+          void notifyTelegramAdmins(
+            `New payment submitted by @${telegramUser.username ?? 'customer'} for ${parsed.data.plan}.\nAmount: ${parsed.data.amount} ETB\nMethod: ${parsed.data.paymentMethod}\nReference: ${parsed.data.transactionRef}`
+          );
+        }, 2000);
+      });
     }
 
     return res.json({

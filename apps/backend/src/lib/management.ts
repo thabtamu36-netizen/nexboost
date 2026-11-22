@@ -137,7 +137,7 @@ async function syncUserToSupabase(user: UserRecord) {
 
   try {
     const supabase = getSupabase();
-    await supabase.from('users').upsert({
+    const { error } = await supabase.from('users').upsert({
       id: user.id,
       telegram_id: user.telegram_id,
       username: user.username,
@@ -147,8 +147,9 @@ async function syncUserToSupabase(user: UserRecord) {
       created_at: user.created_at,
       updated_at: user.updated_at
     }, { onConflict: 'telegram_id' });
-  } catch {
-    // Ignore optional Supabase sync failures so the in-memory flow stays usable.
+    if (error) throw new Error(error.message);
+  } catch (error) {
+    throw error;
   }
 }
 
@@ -159,7 +160,7 @@ async function syncPaymentToSupabase(payment: PaymentRecord & { transaction_ref:
 
   try {
     const supabase = getSupabase();
-    await supabase.from('payments').upsert({
+    const { error } = await supabase.from('payments').upsert({
       id: payment.id,
       user_id: payment.user_id,
       amount: payment.amount,
@@ -170,10 +171,12 @@ async function syncPaymentToSupabase(payment: PaymentRecord & { transaction_ref:
       approved_by: payment.approved_by,
       decision_note: payment.decision_note,
       transaction_ref: payment.transaction_ref,
+      plan: payment.plan,
       created_at: payment.submitted_at
     }, { onConflict: 'transaction_ref' });
-  } catch {
-    // Ignore optional Supabase sync failures so the in-memory flow stays usable.
+    if (error) throw new Error(error.message);
+  } catch (error) {
+    throw error;
   }
 }
 
@@ -408,8 +411,8 @@ export async function updatePaymentDecision(paymentId: string, decision: 'approv
   }
 
   const payment = state.payments[paymentIndex] as PaymentRecord & { transaction_ref: string };
-  if (payment.status === 'approved' && decision === 'approved') {
-    throw new Error('This payment was already approved.');
+  if (payment.status !== 'pending') {
+    throw new Error('This payment has already been processed.');
   }
 
   payment.status = decision;
@@ -458,6 +461,17 @@ export async function updatePaymentDecision(paymentId: string, decision: 'approv
   await syncPaymentToSupabase(payment);
   await syncActivityLogToSupabase(activityLog);
 
+  if (env.TELEGRAM_BOT_TOKEN && user.telegram_id) {
+    const text = decision === 'approved'
+      ? `Payment approved.\nPlan: ${payment.plan ?? 'subscription'}\nStart: ${state.subscriptions.find(s => s.user_id === user.id && s.status === 'active')?.start_date ?? ''}\nExpiry: ${state.subscriptions.find(s => s.user_id === user.id && s.status === 'active')?.expiry_date ?? ''}`
+      : 'Your payment was rejected.';
+    void fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: user.telegram_id, text })
+    });
+  }
+
   return {
     ok: true,
     payment,
@@ -465,7 +479,7 @@ export async function updatePaymentDecision(paymentId: string, decision: 'approv
   };
 }
 
-export const notifyTelegramAdmins = async (message: string) => {
+export const notifyTelegramAdmins = async (message: string, paymentId?: string) => {
   if (!env.TELEGRAM_BOT_TOKEN) {
     return { ok: false, reason: 'Telegram bot is not configured.' };
   }
@@ -476,6 +490,15 @@ export const notifyTelegramAdmins = async (message: string) => {
     return { ok: false, reason: 'No admin chat IDs configured.' };
   }
 
+  const replyMarkup = paymentId
+    ? {
+        inline_keyboard: [[
+          { text: 'Approve', callback_data: `approve:${paymentId}` },
+          { text: 'Reject', callback_data: `reject:${paymentId}` }
+        ]]
+      }
+    : undefined;
+
   const requests = adminIds.map(async (chatId) => {
     const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
@@ -483,7 +506,8 @@ export const notifyTelegramAdmins = async (message: string) => {
       body: JSON.stringify({
         chat_id: chatId,
         text: message,
-        parse_mode: 'HTML'
+        parse_mode: 'HTML',
+        reply_markup: replyMarkup
       })
     });
 

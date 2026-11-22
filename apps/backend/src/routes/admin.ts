@@ -26,8 +26,7 @@ adminRouter.post('/login', (req, res) => {
   }
 
   return res.json({
-    ok: true,
-    token: 'test-admin-secret'
+    ok: true
   });
 });
 

@@ -20,8 +20,7 @@ adminRouter.post('/login', (req, res) => {
         return res.status(401).json({ ok: false, error: 'Invalid admin credentials.' });
     }
     return res.json({
-        ok: true,
-        token: 'test-admin-secret'
+        ok: true
     });
 });
 adminRouter.get('/dashboard', requireAdminAuth, (_req, res) => {

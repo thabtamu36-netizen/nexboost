@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { env, getAdminChatIds, isSupabaseReady } from '../config/env.js';
 import { getSupabase } from './supabase.js';
+export const PLANS = {
+    trial: { durationMs: 24 * 60 * 60 * 1000, amount: 0 },
+    weekly: { durationMs: 7 * 24 * 60 * 60 * 1000, amount: 149 },
+    monthly: { durationMs: 30 * 24 * 60 * 60 * 1000, amount: 349 }
+};
 const state = {
     users: [],
     payments: [],
@@ -251,6 +256,11 @@ export function upsertUser(telegramUser) {
 }
 export async function createPaymentSubmission(input) {
     ensureSeedData();
+    const plan = input.plan;
+    const planConfig = PLANS[plan];
+    if (!planConfig) {
+        throw new Error('Invalid payment plan.');
+    }
     const user = upsertUser({
         telegramId: input.telegramId,
         username: input.username,
@@ -258,21 +268,22 @@ export async function createPaymentSubmission(input) {
         lastName: input.lastName
     });
     await syncUserToSupabase(user);
-    const existingPending = state.payments.find((payment) => payment.user_id === user.id && payment.status === 'pending' && payment.transaction_ref === input.transactionRef);
+    const existingPending = state.payments.find((payment) => payment.user_id === user.id && payment.status === 'pending');
     if (existingPending) {
         return { ok: true, payment: existingPending, user, duplicate: true };
     }
     const payment = {
         id: randomUUID(),
         user_id: user.id,
-        amount: input.amount,
+        amount: planConfig.amount,
         payment_proof: input.paymentProof ?? null,
         payment_method: input.paymentMethod,
         submitted_at: new Date().toISOString(),
         status: 'pending',
         approved_by: null,
         decision_note: null,
-        transaction_ref: input.transactionRef
+        transaction_ref: input.transactionRef,
+        plan
     };
     state.payments.push(payment);
     const activityLog = {
@@ -306,14 +317,16 @@ export async function updatePaymentDecision(paymentId, decision, adminId) {
         throw new Error('User record not found for this payment.');
     }
     if (decision === 'approved') {
+        const plan = (payment.plan ?? 'monthly');
+        const planConfig = PLANS[plan] ?? PLANS.monthly;
         const alreadyActive = state.subscriptions.some((subscription) => subscription.user_id === user.id && subscription.status === 'active');
         if (!alreadyActive) {
             const now = new Date();
-            const expiry = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+            const expiry = new Date(now.getTime() + planConfig.durationMs);
             const subscription = {
                 id: randomUUID(),
                 user_id: user.id,
-                plan: 'monthly',
+                plan,
                 start_date: now.toISOString(),
                 expiry_date: expiry.toISOString(),
                 status: 'active'

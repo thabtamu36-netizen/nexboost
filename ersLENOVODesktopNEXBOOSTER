@@ -1,0 +1,37 @@
+warning: in the working copy of 'miniapp/src/App.tsx', LF will be replaced by CRLF the next time Git touches it
+[1mdiff --git a/miniapp/src/App.tsx b/miniapp/src/App.tsx[m
+[1mindex 63db5060..e877f55e 100644[m
+[1m--- a/miniapp/src/App.tsx[m
+[1m+++ b/miniapp/src/App.tsx[m
+[36m@@ -204,6 +204,7 @@[m [mexport default function App() {[m
+               timeLeft,[m
+               setActiveTab,[m
+               telegramUser,[m
+[32m+[m[32m              telegramInitData,[m
+               isTelegramContext,[m
+               telegramDisplayName,[m
+               paymentStatus,[m
+[36m@@ -247,7 +248,13 @@[m [mfunction renderScreen(tabId: string, props: any) {[m
+     case 'free_trial':[m
+       return <ScreenFreeTrial {...props} />;[m
+     case 'payment':[m
+[31m-      return <ScreenPayment {...props} telegramUser={props.telegramUser} />;[m
+[32m+[m[32m      return ([m
+[32m+[m[32m  <ScreenPayment[m
+[32m+[m[32m    {...props}[m
+[32m+[m[32m    telegramUser={props.telegramUser}[m
+[32m+[m[32m    telegramInitData={props.telegramInitData}[m
+[32m+[m[32m  />[m
+[32m+[m[32m);[m
+     case 'status':[m
+       return <ScreenPaymentStatus[m
+         setActiveTab={props.setActiveTab}[m
+[36m@@ -728,6 +735,8 @@[m [mfunction ScreenPayment({[m
+   transactionError,[m
+   setTransactionError,[m
+   telegramUser,[m
+[32m+[m[32m  telegramInitData,[m
+[32m+[m
+ }: any) {[m
+   const isValidated = txnRef.trim().length > 0;[m
+   const [isSubmitting, setIsSubmitting] = useState(false);[m

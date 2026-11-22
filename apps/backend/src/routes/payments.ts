@@ -12,8 +12,8 @@ import { verifyTelegramInitData } from '../lib/telegramAuth.js';
 export const paymentsRouter = Router();
 
 const paymentSubmitSchema = z.object({
-  plan: z.string().min(1),
-  amount: z.coerce.number().min(1),
+  plan: z.enum(['trial', 'weekly', 'monthly']),
+  amount: z.coerce.number().min(0).optional(),
   paymentMethod: z.string().min(1),
   transactionRef: z.string().min(3),
   paymentProof: z.string().url().optional().nullable()
@@ -63,7 +63,7 @@ paymentsRouter.post('/submit', async (req, res) => {
       firstName: telegramUser.first_name ?? null,
       lastName: telegramUser.last_name ?? null,
       plan: parsed.data.plan,
-      amount: parsed.data.amount,
+      amount: parsed.data.amount ?? 0,
       paymentMethod: parsed.data.paymentMethod,
       transactionRef: parsed.data.transactionRef,
       paymentProof: parsed.data.paymentProof ?? null

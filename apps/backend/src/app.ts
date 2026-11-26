@@ -9,6 +9,13 @@ import { telegramRouter } from './routes/telegram.js';
 
 export function createApp() {
   const app = express();
+  // Add these two lines right here so Telegram is never blocked
+  app.use(cors({ origin: '*' }));
+  app.options('*', cors());
+
+  app.use(express.json());
+
+  // ... keep the rest of your routes below ...
 
   app.disable('x-powered-by');
   app.set('trust proxy', 1);

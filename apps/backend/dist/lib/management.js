@@ -12,18 +12,33 @@ const state = {
     subscriptions: [],
     activityLogs: []
 };
+function withTimeout(promise, ms, label) {
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            reject(new Error(`${label} timed out after ${ms}ms`));
+        }, ms);
+        promise.then((value) => {
+            clearTimeout(timer);
+            resolve(value);
+        }, (error) => {
+            clearTimeout(timer);
+            reject(error);
+        });
+    });
+}
 export async function hydrateStateFromSupabase() {
     if (!isSupabaseReady) {
+        console.log(JSON.stringify({ event: 'supabase_hydrate_skipped', reason: 'not_configured' }));
         return;
     }
     try {
         const supabase = getSupabase();
-        const [usersResult, paymentsResult, subscriptionsResult, activityLogsResult] = await Promise.all([
+        const [usersResult, paymentsResult, subscriptionsResult, activityLogsResult] = await withTimeout(Promise.all([
             supabase.from('users').select('*'),
             supabase.from('payments').select('*'),
             supabase.from('subscriptions').select('*'),
             supabase.from('activity_logs').select('*')
-        ]);
+        ]), 8_000, 'supabase_hydrate');
         if (usersResult.data) {
             state.users = usersResult.data.map((user) => ({
                 id: user.id,
@@ -81,7 +96,7 @@ async function syncUserToSupabase(user) {
     }
     try {
         const supabase = getSupabase();
-        const { error } = await supabase.from('users').upsert({
+        const { error } = await withTimeout(Promise.resolve(supabase.from('users').upsert({
             id: user.id,
             telegram_id: user.telegram_id,
             username: user.username,
@@ -90,7 +105,7 @@ async function syncUserToSupabase(user) {
             account_status: user.account_status,
             created_at: user.created_at,
             updated_at: user.updated_at
-        }, { onConflict: 'telegram_id' });
+        }, { onConflict: 'telegram_id' })), 10_000, 'supabase_user_upsert');
         if (error)
             throw new Error(error.message);
     }
@@ -104,7 +119,7 @@ async function syncPaymentToSupabase(payment) {
     }
     try {
         const supabase = getSupabase();
-        const { error } = await supabase.from('payments').upsert({
+        const { error } = await withTimeout(Promise.resolve(supabase.from('payments').upsert({
             id: payment.id,
             user_id: payment.user_id,
             amount: payment.amount,
@@ -117,7 +132,7 @@ async function syncPaymentToSupabase(payment) {
             transaction_ref: payment.transaction_ref,
             plan: payment.plan,
             created_at: payment.submitted_at
-        }, { onConflict: 'transaction_ref' });
+        }, { onConflict: 'transaction_ref' })), 12_000, 'supabase_payment_upsert');
         if (error)
             throw new Error(error.message);
     }

@@ -4,19 +4,52 @@ import { requireAdminAuth } from '../middleware/adminAuth.js';
 import { createPaymentSubmission, notifyTelegramAdmins, updatePaymentDecision } from '../lib/management.js';
 import { verifyTelegramInitData } from '../lib/telegramAuth.js';
 export const paymentsRouter = Router();
+const PLAN_ALIASES = {
+    trial: 'trial',
+    weekly: 'weekly',
+    monthly: 'monthly',
+    'weekly access': 'weekly',
+    'monthly vip pro': 'monthly',
+    'monthly vip': 'monthly'
+};
 const paymentSubmitSchema = z.object({
-    plan: z.enum(['trial', 'weekly', 'monthly']),
+    plan: z.string().min(1).transform((value, ctx) => {
+        const mapped = PLAN_ALIASES[value.trim().toLowerCase()];
+        if (!mapped) {
+            ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid payment plan.' });
+            return z.NEVER;
+        }
+        return mapped;
+    }),
     amount: z.coerce.number().min(0).optional(),
     paymentMethod: z.string().min(1),
-    transactionRef: z.string().min(3),
-    paymentProof: z.string().url().optional().nullable()
+    transactionRef: z.string().trim().min(3).max(128),
+    paymentProof: z.string().min(1).max(8_000_000).optional().nullable()
 });
 const paymentDecisionSchema = z.object({
     decision: z.enum(['approved', 'rejected'])
 });
 paymentsRouter.post('/submit', async (req, res) => {
+    const startedAt = Date.now();
+    const requestId = req.header('x-request-id') ?? 'none';
     const authHeader = req.header('authorization') ?? '';
+    const contentLength = Number(req.header('content-length') ?? 0);
+    console.log(JSON.stringify({
+        event: 'payment_submit_start',
+        requestId,
+        origin: req.header('origin') ?? null,
+        hasTmaPrefix: authHeader.startsWith('tma '),
+        initDataChars: authHeader.startsWith('tma ') ? Math.max(authHeader.length - 4, 0) : 0,
+        contentLength,
+        path: '/api/payments/submit'
+    }));
     if (!authHeader.startsWith('tma ')) {
+        console.warn(JSON.stringify({
+            event: 'payment_submit_rejected',
+            requestId,
+            reason: 'missing_tma_auth',
+            durationMs: Date.now() - startedAt
+        }));
         return res.status(401).json({
             ok: false,
             error: 'Telegram authentication is required. Reopen NEXBOOST from Telegram.'
@@ -28,6 +61,12 @@ paymentsRouter.post('/submit', async (req, res) => {
         telegramUser = verifyTelegramInitData(initData);
     }
     catch (error) {
+        console.warn(JSON.stringify({
+            event: 'payment_submit_rejected',
+            requestId,
+            reason: 'telegram_auth_failed',
+            durationMs: Date.now() - startedAt
+        }));
         return res.status(401).json({
             ok: false,
             error: error instanceof Error
@@ -37,6 +76,13 @@ paymentsRouter.post('/submit', async (req, res) => {
     }
     const parsed = paymentSubmitSchema.safeParse(req.body);
     if (!parsed.success) {
+        console.warn(JSON.stringify({
+            event: 'payment_submit_rejected',
+            requestId,
+            reason: 'invalid_payload',
+            fieldErrors: parsed.error.issues.map((issue) => issue.path.join('.') || 'body'),
+            durationMs: Date.now() - startedAt
+        }));
         return res.status(400).json({
             ok: false,
             error: 'Invalid payment submission payload.'
@@ -54,9 +100,17 @@ paymentsRouter.post('/submit', async (req, res) => {
             transactionRef: parsed.data.transactionRef,
             paymentProof: parsed.data.paymentProof ?? null
         });
+        console.log(JSON.stringify({
+            event: 'payment_submit_ok',
+            requestId,
+            duplicate: result.duplicate,
+            plan: parsed.data.plan,
+            method: parsed.data.paymentMethod,
+            proofChars: parsed.data.paymentProof?.length ?? 0,
+            durationMs: Date.now() - startedAt
+        }));
         if (!result.duplicate) {
             void notifyTelegramAdmins(`New payment submitted by @${telegramUser.username ?? 'customer'} for ${parsed.data.plan}.\nAmount: ${parsed.data.amount} ETB\nMethod: ${parsed.data.paymentMethod}\nReference: ${parsed.data.transactionRef}`, result.payment.id).catch(() => {
-                // Retry once after a short delay
                 setTimeout(() => {
                     void notifyTelegramAdmins(`New payment submitted by @${telegramUser.username ?? 'customer'} for ${parsed.data.plan}.\nAmount: ${parsed.data.amount} ETB\nMethod: ${parsed.data.paymentMethod}\nReference: ${parsed.data.transactionRef}`);
                 }, 2000);
@@ -70,6 +124,13 @@ paymentsRouter.post('/submit', async (req, res) => {
         });
     }
     catch (error) {
+        console.error(JSON.stringify({
+            event: 'payment_submit_failed',
+            requestId,
+            reason: 'persistence_error',
+            message: error instanceof Error ? error.message : 'unknown',
+            durationMs: Date.now() - startedAt
+        }));
         return res.status(500).json({
             ok: false,
             error: error instanceof Error

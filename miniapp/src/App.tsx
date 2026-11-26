@@ -12,13 +12,47 @@ type TelegramUser = {
   username?: string;
 };
 
-const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'https://backend-nexboost.onrender.com';
-const DEFAULT_PAYMENT_AMOUNT = 349.99;
+const API_BASE_URL = String(import.meta.env.VITE_API_URL ?? 'https://backend-nexboost.onrender.com').replace(/\/$/, '');
+const PLAN_AMOUNTS = {
+  weekly: 149.99,
+  monthly: 349.99
+} as const;
+
+async function pingPaymentServer(timeoutMs = 10_000) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${API_BASE_URL}/health`, {
+      method: 'GET',
+      cache: 'no-store',
+      signal: controller.signal
+    });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+function paymentErrorMessage(error: unknown) {
+  if (error instanceof DOMException && error.name === 'AbortError') {
+    return 'The payment server did not respond. Please check your connection and try again.';
+  }
+  if (error instanceof TypeError) {
+    return 'Could not reach the payment server. Please check your connection and try again.';
+  }
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return 'Your payment could not be saved. Please try again.';
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('welcome');
   const [selectedNetwork, setSelectedNetwork] = useState('ethio');
   const [selectedDevice, setSelectedDevice] = useState('android');
+  const [selectedPlan, setSelectedPlan] = useState<'trial' | 'weekly' | 'monthly'>('monthly');
   const [copiedDns, setCopiedDns] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState('telebirr');
   const [txnRef, setTxnRef] = useState('');
@@ -71,6 +105,8 @@ export default function App() {
   };
 
   useEffect(() => {
+    void pingPaymentServer();
+
     const storedStatus = localStorage.getItem('nexboost-payment-status');
     if (storedStatus === 'pending' || storedStatus === 'approved' || storedStatus === 'rejected') {
       setPaymentStatus(storedStatus);
@@ -193,6 +229,8 @@ export default function App() {
               setSelectedNetwork,
               selectedDevice,
               setSelectedDevice,
+              selectedPlan,
+              setSelectedPlan,
               copiedDns,
               copyToClipboard,
               paymentMethod,
@@ -240,7 +278,7 @@ function renderScreen(tabId: string, props: any) {
     case 'welcome':
       return <ScreenWelcome setActiveTab={props.setActiveTab} telegramUser={props.telegramUser} isTelegramContext={props.isTelegramContext} telegramDisplayName={props.telegramDisplayName} />;
     case 'plans':
-      return <ScreenPlans setActiveTab={props.setActiveTab} engagementAccepted={props.engagementAccepted} setEngagementAccepted={props.setEngagementAccepted} />;
+      return <ScreenPlans setActiveTab={props.setActiveTab} selectedPlan={props.selectedPlan} setSelectedPlan={props.setSelectedPlan} />;
     case 'network':
       return <ScreenNetwork selectedNetwork={props.selectedNetwork} setSelectedNetwork={props.setSelectedNetwork} setActiveTab={props.setActiveTab} engagementAccepted={props.engagementAccepted} setEngagementAccepted={props.setEngagementAccepted} />;
     case 'device':
@@ -253,6 +291,7 @@ function renderScreen(tabId: string, props: any) {
           {...props}
           telegramUser={props.telegramUser}
           telegramInitData={props.telegramInitData}
+          selectedPlan={props.selectedPlan}
         />
       );
     case 'status':
@@ -358,8 +397,15 @@ function ScreenWelcome({
   );
 }
 
-function ScreenPlans({ setActiveTab }: { setActiveTab: (tab: string) => void }) {
-  const [selectedPlan, setSelectedPlan] = useState('monthly');
+function ScreenPlans({
+  setActiveTab,
+  selectedPlan,
+  setSelectedPlan,
+}: {
+  setActiveTab: (tab: string) => void;
+  selectedPlan: 'trial' | 'weekly' | 'monthly';
+  setSelectedPlan: (plan: 'trial' | 'weekly' | 'monthly') => void;
+}) {
 
   return (
     <div className="flex-1 p-5 flex flex-col justify-between">
@@ -736,8 +782,9 @@ function ScreenPayment({
   setTransactionError,
   telegramUser,
   telegramInitData,
+  selectedPlan,
 }: any) {
-  const isValidated = txnRef.trim().length > 0;
+  const checkoutAmount = PLAN_AMOUNTS[selectedPlan === 'weekly' ? 'weekly' : 'monthly'];
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleScreenshotChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -787,6 +834,12 @@ function ScreenPayment({
 
     if (!valid) return;
 
+    const initData = typeof telegramInitData === 'string' ? telegramInitData : '';
+    if (!initData) {
+      setTransactionError('Open NEXBOOST from the Telegram bot before submitting your payment.');
+      return;
+    }
+
     const storedTelegramId = Number(localStorage.getItem('nexboost-telegram-id') ?? '0');
     const telegramId = telegramUser?.id ?? storedTelegramId;
     if (!Number.isInteger(telegramId) || telegramId <= 0) {
@@ -813,13 +866,14 @@ function ScreenPayment({
       setScreenshotError(error instanceof Error ? error.message : 'The payment screenshot could not be read.');
       return;
     }
+    const plan = selectedPlan === 'weekly' ? 'weekly' : 'monthly';
     const paymentPayload = {
       telegramId: telegramId || 0,
       username: telegramUser?.username ?? null,
       firstName: telegramUser?.first_name ?? null,
       lastName: telegramUser?.last_name ?? null,
-      plan: 'Monthly VIP Pro',
-      amount: DEFAULT_PAYMENT_AMOUNT,
+      plan,
+      amount: checkoutAmount,
       paymentMethod,
       transactionRef: txnRef.trim(),
       paymentProof: proofUri
@@ -827,35 +881,72 @@ function ScreenPayment({
 
     setIsSubmitting(true);
     setTransactionError('');
-    const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), 25_000);
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/payments/submit`, {
-        method: 'POST',
-       headers: {
-  'Content-Type': 'application/json',
-  'Authorization': `tma ${telegramInitData}`
-},
-        body: JSON.stringify(paymentPayload),
-        signal: controller.signal
-      });
+    const requestId = window.crypto.randomUUID();
 
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || payload?.ok === false) {
-        throw new Error(payload?.error ?? 'Unable to send payment to the dashboard database.');
+    const submitOnce = async (timeoutMs: number) => {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+      const startedAt = Date.now();
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/payments/submit`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `tma ${initData}`,
+            'X-Request-Id': requestId
+          },
+          body: JSON.stringify(paymentPayload),
+          signal: controller.signal
+        });
+
+        const payload = await response.json().catch(() => ({} as { ok?: boolean; error?: string }));
+        console.info('payment_submit_response', {
+          requestId,
+          status: response.status,
+          ok: response.ok,
+          durationMs: Date.now() - startedAt,
+          endpoint: `${API_BASE_URL}/api/payments/submit`
+        });
+        if (!response.ok || payload?.ok === false) {
+          const serverError = typeof payload?.error === 'string' ? payload.error : 'Unable to send payment to the dashboard database.';
+          const error = new Error(response.status === 503 ? 'The payment server is starting. Please try again in a moment.' : serverError);
+          (error as Error & { retryable?: boolean }).retryable = response.status === 503 || response.status >= 500;
+          throw error;
+        }
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          (error as DOMException & { retryable?: boolean }).retryable = true;
+        }
+        if (error instanceof TypeError) {
+          (error as TypeError & { retryable?: boolean }).retryable = true;
+        }
+        throw error;
+      } finally {
+        window.clearTimeout(timeoutId);
+      }
+    };
+
+    try {
+      await pingPaymentServer(12_000);
+      try {
+        await submitOnce(25_000);
+      } catch (error) {
+        const retryable = Boolean((error as { retryable?: boolean })?.retryable);
+        if (!retryable) {
+          throw error;
+        }
+        console.info('payment_submit_retry', { requestId, endpoint: `${API_BASE_URL}/api/payments/submit` });
+        await pingPaymentServer(12_000);
+        await submitOnce(25_000);
       }
     } catch (error) {
-      console.error('Payment submission failed:', error);
-      setTransactionError(
-        error instanceof DOMException && error.name === 'AbortError'
-          ? 'The payment server did not respond. Please check your connection and try again.'
-          : error instanceof Error
-          ? error.message
-          : 'Your payment could not be saved. Please try again.'
-      );
+      console.error('Payment submission failed:', {
+        requestId,
+        name: error instanceof Error ? error.name : 'unknown'
+      });
+      setTransactionError(paymentErrorMessage(error));
       return;
     } finally {
-      window.clearTimeout(timeoutId);
       setIsSubmitting(false);
     }
 
@@ -876,7 +967,7 @@ function ScreenPayment({
       <div>
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-base font-bold text-white">Payment Checkout</h2>
-          <span className="text-[11px] font-bold text-cyan-400">349.99 ETB</span>
+          <span className="text-[11px] font-bold text-cyan-400">{checkoutAmount.toFixed(2)} ETB</span>
         </div>
 
         <div className="grid grid-cols-2 gap-2 mb-4">
@@ -930,7 +1021,7 @@ function ScreenPayment({
           )}
           <div className="flex justify-between items-center text-xs pt-2 border-t border-slate-800/80">
             <span className="text-slate-400">Total Amount:</span>
-            <span className="font-bold text-white">349.99 ETB</span>
+            <span className="font-bold text-white">{checkoutAmount.toFixed(2)} ETB</span>
           </div>
         </div>
 

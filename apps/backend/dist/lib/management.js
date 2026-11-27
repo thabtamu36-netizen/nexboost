@@ -382,7 +382,7 @@ export async function updatePaymentDecision(paymentId, decision, adminId) {
         user
     };
 }
-export const notifyTelegramAdmins = async (message, paymentId) => {
+export const notifyTelegramAdmins = async (message, paymentId, paymentProof) => {
     if (!env.TELEGRAM_BOT_TOKEN) {
         return { ok: false, reason: 'Telegram bot is not configured.' };
     }
@@ -398,21 +398,51 @@ export const notifyTelegramAdmins = async (message, paymentId) => {
                 ]]
         }
         : undefined;
+    // The Mini App sends screenshots as Base64 data URLs.
+    const imageMatch = paymentProof?.match(/^data:(image\/(?:jpeg|png));base64,([A-Za-z0-9+/=\s]+)$/);
     const requests = adminIds.map(async (chatId) => {
-        const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                chat_id: chatId,
-                text: message,
-                parse_mode: 'HTML',
-                reply_markup: replyMarkup
-            })
-        });
+        let response;
+        if (imageMatch) {
+            const mimeType = imageMatch[1];
+            const base64Data = imageMatch[2].replace(/\s/g, '');
+            const imageBuffer = Buffer.from(base64Data, 'base64');
+            const form = new FormData();
+            form.append('chat_id', chatId);
+            form.append('photo', new Blob([imageBuffer], { type: mimeType }), 'payment-proof.jpg');
+            form.append('caption', message);
+            form.append('parse_mode', 'HTML');
+            if (replyMarkup) {
+                form.append('reply_markup', JSON.stringify(replyMarkup));
+            }
+            response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+                method: 'POST',
+                body: form
+            });
+        }
+        else {
+            response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    chat_id: chatId,
+                    text: message,
+                    parse_mode: 'HTML',
+                    reply_markup: replyMarkup
+                })
+            });
+        }
+        if (!response.ok) {
+            const errorBody = await response.text();
+            console.error(`Telegram admin notification failed for ${chatId}:`, errorBody);
+        }
         return response.ok;
     });
-    await Promise.all(requests);
-    return { ok: true };
+    const results = await Promise.all(requests);
+    return {
+        ok: results.every(Boolean),
+        sent: results.filter(Boolean).length,
+        failed: results.filter((success) => !success).length
+    };
 };
 export async function activateTrialForUser(input) {
     ensureSeedData();

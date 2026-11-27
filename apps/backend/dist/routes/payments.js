@@ -110,10 +110,12 @@ paymentsRouter.post('/submit', async (req, res) => {
             durationMs: Date.now() - startedAt
         }));
         if (!result.duplicate) {
-            void notifyTelegramAdmins(`New payment submitted by @${telegramUser.username ?? 'customer'} for ${parsed.data.plan}.\nAmount: ${parsed.data.amount} ETB\nMethod: ${parsed.data.paymentMethod}\nReference: ${parsed.data.transactionRef}`, result.payment.id).catch(() => {
-                setTimeout(() => {
-                    void notifyTelegramAdmins(`New payment submitted by @${telegramUser.username ?? 'customer'} for ${parsed.data.plan}.\nAmount: ${parsed.data.amount} ETB\nMethod: ${parsed.data.paymentMethod}\nReference: ${parsed.data.transactionRef}`);
-                }, 2000);
+            const adminMessage = `New payment submitted by @${telegramUser.username ?? 'customer'} for ${parsed.data.plan}.\n` +
+                `Amount: ${parsed.data.amount} ETB\n` +
+                `Method: ${parsed.data.paymentMethod}\n` +
+                `Reference: ${parsed.data.transactionRef}`;
+            void notifyTelegramAdmins(adminMessage, result.payment.id, parsed.data.paymentProof ?? null).catch((error) => {
+                console.error('Admin payment notification failed:', error);
             });
         }
         return res.json({

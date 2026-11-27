@@ -56,7 +56,7 @@ async function compressImageToDataUrl(file: File, maxDimension = 1400, quality =
     reader.readAsDataURL(file);
   });
 
-  if (!file.type.startsWith('image/')) {
+  if (file.type && !file.type.startsWith('image/')) {
     return rawDataUrl;
   }
 

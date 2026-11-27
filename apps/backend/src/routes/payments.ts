@@ -133,13 +133,22 @@ paymentsRouter.post('/submit', async (req, res) => {
     `Method: ${parsed.data.paymentMethod}\n` +
     `Reference: ${parsed.data.transactionRef}`;
 
-  void notifyTelegramAdmins(
-    adminMessage,
-    result.payment.id,
-    parsed.data.paymentProof ?? null
-  ).catch((error) => {
-    console.error('Admin payment notification failed:', error);
-  });
+  void (async () => {
+    try {
+      const notificationResult = await notifyTelegramAdmins(
+        adminMessage,
+        result.payment.id,
+        parsed.data.paymentProof ?? null
+      );
+
+      console.log(
+        'ADMIN_TELEGRAM_NOTIFICATION_RESULT:',
+        JSON.stringify(notificationResult)
+      );
+    } catch (error) {
+      console.error('ADMIN_TELEGRAM_NOTIFICATION_ERROR:', error);
+    }
+  })();
 }
 
     return res.json({

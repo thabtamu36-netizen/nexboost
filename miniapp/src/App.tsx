@@ -48,7 +48,7 @@ function paymentErrorMessage(error: unknown) {
   return 'Your payment could not be saved. Please try again.';
 }
 
-async function compressImageToDataUrl(file: File, maxDimension = 1400, quality = 0.82): Promise<string> {
+async function compressImageToDataUrl(file: File, maxBytes = 800_000): Promise<string> {
   const rawDataUrl = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result ?? ''));
@@ -56,32 +56,60 @@ async function compressImageToDataUrl(file: File, maxDimension = 1400, quality =
     reader.readAsDataURL(file);
   });
 
-  if (file.type && !file.type.startsWith('image/')) {
+  if (rawDataUrl.length <= maxBytes) {
     return rawDataUrl;
   }
 
-  return new Promise<string>((resolve) => {
+  return new Promise<string>((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
-      const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
-      const width = Math.max(1, Math.round(img.width * scale));
-      const height = Math.max(1, Math.round(img.height * scale));
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        resolve(rawDataUrl);
-        return;
+      let maxDimension = 1200;
+      let quality = 0.78;
+      let result = rawDataUrl;
+
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
+        const width = Math.max(1, Math.round(img.width * scale));
+        const height = Math.max(1, Math.round(img.height * scale));
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) break;
+
+        // Fill white background so transparent PNGs convert cleanly to JPEG
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
+
+        result = canvas.toDataURL('image/jpeg', quality);
+        if (result.length <= maxBytes) {
+          resolve(result);
+          return;
+        }
+
+        maxDimension = Math.round(maxDimension * 0.75);
+        quality = Math.max(0.45, quality - 0.1);
       }
-      ctx.drawImage(img, 0, 0, width, height);
-      const compressed = canvas.toDataURL('image/jpeg', quality);
-      resolve(compressed.length < rawDataUrl.length ? compressed : rawDataUrl);
+
+      if (result.length <= 4_000_000) {
+        resolve(result);
+      } else {
+        reject(new Error('Screenshot is still too large after compression. Please crop the receipt and try again.'));
+      }
     };
-    img.onerror = () => resolve(rawDataUrl);
+    img.onerror = () => {
+      if (rawDataUrl.length <= 4_000_000) {
+        resolve(rawDataUrl);
+      } else {
+        reject(new Error('Unsupported screenshot format or file too large. Please take a standard screenshot and try again.'));
+      }
+    };
     img.src = rawDataUrl;
   });
 }
+
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('welcome');
@@ -192,8 +220,8 @@ export default function App() {
     webApp.ready();
     webApp.expand();
 
-     // Keep the signed authentication data in memory only.
-  setTelegramInitData(webApp.initData ?? '');
+    // Keep the signed authentication data in memory only.
+    setTelegramInitData(webApp.initData ?? '');
 
 
     const user = webApp.initDataUnsafe?.user ?? null;
@@ -456,11 +484,10 @@ function ScreenPlans({
         <div className="space-y-3">
           <div
             onClick={() => setSelectedPlan('trial')}
-            className={`p-4 rounded-2xl border transition cursor-pointer relative ${
-              selectedPlan === 'trial'
+            className={`p-4 rounded-2xl border transition cursor-pointer relative ${selectedPlan === 'trial'
                 ? 'bg-slate-900 border-emerald-500 ring-1 ring-emerald-500/50'
                 : 'bg-[#0f1422]/60 border-slate-800/80 hover:border-slate-700'
-            }`}
+              }`}
           >
             <div className="flex justify-between items-start">
               <div>
@@ -479,11 +506,10 @@ function ScreenPlans({
 
           <div
             onClick={() => setSelectedPlan('weekly')}
-            className={`p-4 rounded-2xl border transition cursor-pointer relative ${
-              selectedPlan === 'weekly'
+            className={`p-4 rounded-2xl border transition cursor-pointer relative ${selectedPlan === 'weekly'
                 ? 'bg-slate-900 border-emerald-500 ring-1 ring-emerald-500/50'
                 : 'bg-[#0f1422]/60 border-slate-800/80 hover:border-slate-700'
-            }`}
+              }`}
           >
             <div className="flex justify-between items-start">
               <div>
@@ -499,11 +525,10 @@ function ScreenPlans({
 
           <div
             onClick={() => setSelectedPlan('monthly')}
-            className={`p-4 rounded-2xl border transition cursor-pointer relative overflow-hidden ${
-              selectedPlan === 'monthly'
+            className={`p-4 rounded-2xl border transition cursor-pointer relative overflow-hidden ${selectedPlan === 'monthly'
                 ? 'bg-gradient-to-b from-[#111c2e] to-[#0d1424] border-cyan-400 ring-1 ring-cyan-400/50'
                 : 'bg-[#0f1422]/60 border-slate-800/80 hover:border-slate-700'
-            }`}
+              }`}
           >
             <div className="absolute top-0 right-0 bg-gradient-to-l from-cyan-400 to-emerald-400 text-slate-950 font-black text-[9px] px-3 py-0.5 rounded-bl-lg uppercase tracking-wider">
               Best Value
@@ -563,11 +588,10 @@ function ScreenNetwork({ selectedNetwork, setSelectedNetwork, setActiveTab }: { 
         <div className="space-y-3">
           <div
             onClick={() => setSelectedNetwork('ethio')}
-            className={`p-4 rounded-2xl border transition cursor-pointer flex items-center gap-4 ${
-              selectedNetwork === 'ethio'
+            className={`p-4 rounded-2xl border transition cursor-pointer flex items-center gap-4 ${selectedNetwork === 'ethio'
                 ? 'bg-slate-900 border-emerald-500 ring-1 ring-emerald-500/50'
                 : 'bg-[#0f1422]/60 border-slate-800/80 hover:border-slate-700'
-            }`}
+              }`}
           >
             <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center shrink-0">
               <Globe className="w-6 h-6 text-emerald-400" />
@@ -586,11 +610,10 @@ function ScreenNetwork({ selectedNetwork, setSelectedNetwork, setActiveTab }: { 
 
           <div
             onClick={() => setSelectedNetwork('safaricom')}
-            className={`p-4 rounded-2xl border transition cursor-pointer flex items-center gap-4 ${
-              selectedNetwork === 'safaricom'
+            className={`p-4 rounded-2xl border transition cursor-pointer flex items-center gap-4 ${selectedNetwork === 'safaricom'
                 ? 'bg-slate-900 border-cyan-400 ring-1 ring-cyan-400/50'
                 : 'bg-[#0f1422]/60 border-slate-800/80 hover:border-slate-700'
-            }`}
+              }`}
           >
             <div className="w-12 h-12 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center shrink-0">
               <Globe className="w-6 h-6 text-cyan-400" />
@@ -640,11 +663,10 @@ function ScreenDevice({ selectedDevice, setSelectedDevice, setActiveTab }: { sel
         <div className="grid grid-cols-2 gap-3">
           <div
             onClick={() => setSelectedDevice('android')}
-            className={`p-4 rounded-2xl border transition cursor-pointer flex flex-col items-center text-center ${
-              selectedDevice === 'android'
+            className={`p-4 rounded-2xl border transition cursor-pointer flex flex-col items-center text-center ${selectedDevice === 'android'
                 ? 'bg-slate-900 border-emerald-500 ring-1 ring-emerald-500/50'
                 : 'bg-[#0f1422]/60 border-slate-800/80 hover:border-slate-700'
-            }`}
+              }`}
           >
             <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center mb-2">
               <Smartphone className="w-6 h-6 text-emerald-400" />
@@ -655,11 +677,10 @@ function ScreenDevice({ selectedDevice, setSelectedDevice, setActiveTab }: { sel
 
           <div
             onClick={() => setSelectedDevice('iphone')}
-            className={`p-4 rounded-2xl border transition cursor-pointer flex flex-col items-center text-center ${
-              selectedDevice === 'iphone'
+            className={`p-4 rounded-2xl border transition cursor-pointer flex flex-col items-center text-center ${selectedDevice === 'iphone'
                 ? 'bg-slate-900 border-cyan-400 ring-1 ring-cyan-400/50'
                 : 'bg-[#0f1422]/60 border-slate-800/80 hover:border-slate-700'
-            }`}
+              }`}
           >
             <div className="w-12 h-12 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center mb-2">
               <Smartphone className="w-6 h-6 text-cyan-400" />
@@ -735,17 +756,15 @@ function ScreenFreeTrial({ copiedDns, copyToClipboard, setupOs, setSetupOs, time
             <div className="flex bg-slate-900 border border-slate-800 rounded-lg p-0.5">
               <button
                 onClick={() => setSetupOs('android')}
-                className={`px-2.5 py-1 rounded text-[10px] font-bold ${
-                  setupOs === 'android' ? 'bg-emerald-500 text-slate-950' : 'text-slate-400'
-                }`}
+                className={`px-2.5 py-1 rounded text-[10px] font-bold ${setupOs === 'android' ? 'bg-emerald-500 text-slate-950' : 'text-slate-400'
+                  }`}
               >
                 Android
               </button>
               <button
                 onClick={() => setSetupOs('iphone')}
-                className={`px-2.5 py-1 rounded text-[10px] font-bold ${
-                  setupOs === 'iphone' ? 'bg-cyan-400 text-slate-950' : 'text-slate-400'
-                }`}
+                className={`px-2.5 py-1 rounded text-[10px] font-bold ${setupOs === 'iphone' ? 'bg-cyan-400 text-slate-950' : 'text-slate-400'
+                  }`}
               >
                 iPhone
               </button>
@@ -1018,22 +1037,20 @@ function ScreenPayment({
         <div className="grid grid-cols-2 gap-2 mb-4">
           <button
             onClick={() => setPaymentMethod('telebirr')}
-            className={`p-3 rounded-xl border text-left transition ${
-              paymentMethod === 'telebirr'
+            className={`p-3 rounded-xl border text-left transition ${paymentMethod === 'telebirr'
                 ? 'bg-slate-900 border-emerald-500 ring-1 ring-emerald-500/40'
                 : 'bg-[#0f1422]/60 border-slate-800'
-            }`}
+              }`}
           >
             <div className="text-xs font-bold text-white">Telebirr</div>
             <div className="text-[9px] text-slate-400">Direct Phone Transfer</div>
           </button>
           <button
             onClick={() => setPaymentMethod('cbe')}
-            className={`p-3 rounded-xl border text-left transition ${
-              paymentMethod === 'cbe'
+            className={`p-3 rounded-xl border text-left transition ${paymentMethod === 'cbe'
                 ? 'bg-slate-900 border-cyan-400 ring-1 ring-cyan-400/40'
                 : 'bg-[#0f1422]/60 border-slate-800'
-            }`}
+              }`}
           >
             <div className="text-xs font-bold text-white">CBE</div>
             <div className="text-[9px] text-slate-400">Commercial Bank</div>
@@ -1336,17 +1353,15 @@ function ScreenPremiumDashboard({ copiedDns, copyToClipboard, setupOs, setSetupO
             <div className="flex bg-slate-900 border border-slate-800 rounded-lg p-0.5">
               <button
                 onClick={() => setSetupOs('android')}
-                className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                  setupOs === 'android' ? 'bg-emerald-500 text-slate-950' : 'text-slate-400'
-                }`}
+                className={`px-2 py-0.5 rounded text-[10px] font-bold ${setupOs === 'android' ? 'bg-emerald-500 text-slate-950' : 'text-slate-400'
+                  }`}
               >
                 Android
               </button>
               <button
                 onClick={() => setSetupOs('iphone')}
-                className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                  setupOs === 'iphone' ? 'bg-cyan-400 text-slate-950' : 'text-slate-400'
-                }`}
+                className={`px-2 py-0.5 rounded text-[10px] font-bold ${setupOs === 'iphone' ? 'bg-cyan-400 text-slate-950' : 'text-slate-400'
+                  }`}
               >
                 iPhone
               </button>
@@ -1492,9 +1507,8 @@ function ScreenAdmin() {
             <button
               key={tab}
               onClick={() => setAdminTab(tab)}
-              className={`flex-1 py-1.5 rounded-lg capitalize transition ${
-                adminTab === tab ? 'bg-slate-800 text-white border border-slate-700' : 'text-slate-400'
-              }`}
+              className={`flex-1 py-1.5 rounded-lg capitalize transition ${adminTab === tab ? 'bg-slate-800 text-white border border-slate-700' : 'text-slate-400'
+                }`}
             >
               {tab}
             </button>

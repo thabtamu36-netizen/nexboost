@@ -43,5 +43,19 @@ export function createApp() {
   app.use('/api/payments', paymentsRouter);
   app.use('/api/admin', adminRouter);
 
+  app.use((err: Error & { status?: number; type?: string }, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    if (err?.type === 'entity.too.large' || err?.status === 413) {
+      return res.status(413).json({
+        ok: false,
+        error: 'Payment proof image is too large. Please upload a smaller screenshot.'
+      });
+    }
+    const status = typeof err?.status === 'number' && err.status >= 400 ? err.status : 500;
+    return res.status(status).json({
+      ok: false,
+      error: err?.message || 'Unexpected server error.'
+    });
+  });
+
   return app;
 }

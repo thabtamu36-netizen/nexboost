@@ -24,7 +24,7 @@ const paymentSubmitSchema = z.object({
     amount: z.coerce.number().min(0).optional(),
     paymentMethod: z.string().min(1),
     transactionRef: z.string().trim().min(3).max(128),
-    paymentProof: z.string().min(1).max(8_000_000).optional().nullable()
+    paymentProof: z.string().min(1).max(30_000_000).optional().nullable()
 });
 const paymentDecisionSchema = z.object({
     decision: z.enum(['approved', 'rejected'])

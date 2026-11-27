@@ -48,6 +48,41 @@ function paymentErrorMessage(error: unknown) {
   return 'Your payment could not be saved. Please try again.';
 }
 
+async function compressImageToDataUrl(file: File, maxDimension = 1400, quality = 0.82): Promise<string> {
+  const rawDataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.onerror = () => reject(new Error('The payment screenshot could not be read. Please select it again.'));
+    reader.readAsDataURL(file);
+  });
+
+  if (!file.type.startsWith('image/')) {
+    return rawDataUrl;
+  }
+
+  return new Promise<string>((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
+      const width = Math.max(1, Math.round(img.width * scale));
+      const height = Math.max(1, Math.round(img.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        resolve(rawDataUrl);
+        return;
+      }
+      ctx.drawImage(img, 0, 0, width, height);
+      const compressed = canvas.toDataURL('image/jpeg', quality);
+      resolve(compressed.length < rawDataUrl.length ? compressed : rawDataUrl);
+    };
+    img.onerror = () => resolve(rawDataUrl);
+    img.src = rawDataUrl;
+  });
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('welcome');
   const [selectedNetwork, setSelectedNetwork] = useState('ethio');
@@ -786,6 +821,29 @@ function ScreenPayment({
 }: any) {
   const checkoutAmount = PLAN_AMOUNTS[selectedPlan === 'weekly' ? 'weekly' : 'monthly'];
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [copiedPaymentNumber, setCopiedPaymentNumber] = useState(false);
+  const activePaymentNumber = paymentMethod === 'telebirr' ? '0907554351' : '1000516714259';
+
+  const handleCopyPaymentNumber = async () => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(activePaymentNumber);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = activePaymentNumber;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setCopiedPaymentNumber(true);
+      window.setTimeout(() => setCopiedPaymentNumber(false), 2000);
+    } catch {
+      setCopiedPaymentNumber(false);
+    }
+  };
 
   const handleScreenshotChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0] ?? null;
@@ -856,12 +914,7 @@ function ScreenPayment({
 
     let proofUri: string | null = null;
     try {
-      proofUri = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result ?? ''));
-        reader.onerror = () => reject(new Error('The payment screenshot could not be read. Please select it again.'));
-        reader.readAsDataURL(screenshotFile);
-      });
+      proofUri = await compressImageToDataUrl(screenshotFile);
     } catch (error) {
       setScreenshotError(error instanceof Error ? error.message : 'The payment screenshot could not be read.');
       return;
@@ -998,9 +1051,19 @@ function ScreenPayment({
         <div className="p-4 rounded-2xl bg-[#0e1424] border border-slate-800 space-y-3 mb-4">
           {paymentMethod === 'telebirr' ? (
             <>
-              <div className="flex justify-between items-center text-xs">
+              <div className="flex justify-between items-center text-xs gap-2">
                 <span className="text-slate-400">Telebirr Phone Number:</span>
-                <span className="font-mono font-bold text-emerald-400">0907554351</span>
+                <div className="flex items-center gap-2">
+                  <span className="font-mono font-bold text-emerald-400">0907554351</span>
+                  <button
+                    type="button"
+                    onClick={handleCopyPaymentNumber}
+                    className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-bold text-emerald-300 hover:bg-emerald-500/20 transition"
+                  >
+                    {copiedPaymentNumber ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                    <span>{copiedPaymentNumber ? 'Copied' : 'Copy'}</span>
+                  </button>
+                </div>
               </div>
               <div className="flex justify-between items-center text-xs">
                 <span className="text-slate-400">Receiver:</span>
@@ -1009,9 +1072,19 @@ function ScreenPayment({
             </>
           ) : (
             <>
-              <div className="flex justify-between items-center text-xs">
+              <div className="flex justify-between items-center text-xs gap-2">
                 <span className="text-slate-400">CBE Account:</span>
-                <span className="font-mono font-bold text-cyan-400">1000516714259</span>
+                <div className="flex items-center gap-2">
+                  <span className="font-mono font-bold text-cyan-400">1000516714259</span>
+                  <button
+                    type="button"
+                    onClick={handleCopyPaymentNumber}
+                    className="inline-flex items-center gap-1 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-[10px] font-bold text-cyan-300 hover:bg-cyan-500/20 transition"
+                  >
+                    {copiedPaymentNumber ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                    <span>{copiedPaymentNumber ? 'Copied' : 'Copy'}</span>
+                  </button>
+                </div>
               </div>
               <div className="flex justify-between items-center text-xs">
                 <span className="text-slate-400">Account Name:</span>
@@ -1107,6 +1180,32 @@ function ScreenPayment({
         <span>{isSubmitting ? 'Submitting Payment…' : 'Submit Payment'}</span>
         <ArrowRight className="w-4 h-4" />
       </button>
+
+      <div className="mt-3 p-3.5 rounded-2xl bg-[#0b1020] border border-slate-800/90 space-y-2">
+        <div className="text-[10px] uppercase tracking-wider font-bold text-cyan-400">
+          What You Will Submit
+        </div>
+        <ul className="space-y-1.5 text-[11px] text-slate-300 leading-relaxed">
+          <li className="flex items-start gap-2">
+            <span className="text-emerald-400 font-bold">1.</span>
+            <span>
+              Your selected plan (<strong className="text-white">{selectedPlan === 'weekly' ? 'Weekly' : 'Monthly'}</strong> — {checkoutAmount.toFixed(2)} ETB) and payment method (<strong className="text-white">{paymentMethod === 'telebirr' ? 'Telebirr' : 'CBE'}</strong>).
+            </span>
+          </li>
+          <li className="flex items-start gap-2">
+            <span className="text-emerald-400 font-bold">2.</span>
+            <span>
+              Your {paymentMethod === 'telebirr' ? 'Transaction ID' : 'Transaction Reference Number'} and payment receipt screenshot for verification.
+            </span>
+          </li>
+          <li className="flex items-start gap-2">
+            <span className="text-emerald-400 font-bold">3.</span>
+            <span>
+              Once submitted, our team reviews your payment and activates your VIP subscription in the Status tab.
+            </span>
+          </li>
+        </ul>
+      </div>
     </div>
   );
 }

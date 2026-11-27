@@ -854,18 +854,10 @@ function ScreenPayment({
       return;
     }
 
-    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-    if (!allowedTypes.includes(file.type)) {
+    if (file.type && !file.type.startsWith('image/')) {
       setScreenshotFile(null);
       setScreenshotPreview('');
-      setScreenshotError('Please upload a JPG, JPEG, PNG, or WebP screenshot.');
-      return;
-    }
-
-    if (file.size > 5 * 1024 * 1024) {
-      setScreenshotFile(null);
-      setScreenshotPreview('');
-      setScreenshotError('Screenshot must be smaller than 5MB.');
+      setScreenshotError('Please upload an image screenshot.');
       return;
     }
 
@@ -1144,7 +1136,7 @@ function ScreenPayment({
           <label className="text-xs font-bold text-slate-300 block">Payment Screenshot</label>
           <input
             type="file"
-            accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+            accept="image/*"
             onChange={handleScreenshotChange}
             className="block w-full text-[11px] text-slate-300 file:mr-3 file:rounded-xl file:border-0 file:bg-emerald-500/15 file:px-3 file:py-2 file:text-xs file:font-bold file:text-emerald-400"
           />

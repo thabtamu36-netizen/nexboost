@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+﻿import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { env, getAdminChatIds, isSupabaseReady } from '../config/env.js';
 import { getSupabase } from './supabase.js';
 
@@ -10,7 +10,7 @@ export const PLANS = {
 
 export type PlanName = keyof typeof PLANS;
 export type PaymentStatus = 'pending' | 'approved' | 'rejected';
-export type SubscriptionStatus = 'trial' | 'active' | 'expired' | 'suspended' | 'inactive';
+export type SubscriptionStatus = 'trial' | 'active' | 'expired' | 'suspended' | 'inactive' | 'revoked';
 
 export type UserRecord = {
   id: string;
@@ -33,6 +33,8 @@ export type PaymentRecord = {
   status: PaymentStatus;
   transaction_ref?: string;
   plan?: string;
+  network?: string | null;
+  device?: string | null;
   approved_by?: string | null;
   decision_note?: string | null;
 };
@@ -44,6 +46,8 @@ export type SubscriptionRecord = {
   start_date: string;
   expiry_date: string;
   status: SubscriptionStatus;
+  demo_link?: string | null;
+  demo_token_hash?: string | null;
 };
 
 export type ActivityLogRecord = {
@@ -79,6 +83,27 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
       }
     );
   });
+}
+
+function generateDemoDnsCredentials(prefix = 'ethio-demo') {
+  const token = randomBytes(12).toString('hex');
+  const tokenHash = createHash('sha256').update(token).digest('hex');
+  const rawDomain = (env as Record<string, unknown>).DEMO_DNS_DOMAIN;
+  const baseDomain = typeof rawDomain === 'string' && rawDomain.trim()
+    ? rawDomain.trim().replace(/^https?:\/\//, '').replace(/\/$/, '')
+    : 'demo.nexboost.net';
+  const demoLink = `https://${baseDomain}/dns-query/${prefix}-${token.slice(0, 10)}`;
+  return { demoLink, tokenHash };
+}
+
+function expireOutdatedSubscriptions() {
+  const nowMs = Date.now();
+  for (const sub of state.subscriptions) {
+    if ((sub.status === 'active' || sub.status === 'trial') && new Date(sub.expiry_date).getTime() <= nowMs) {
+      sub.status = 'expired';
+      void syncSubscriptionToSupabase(sub);
+    }
+  }
 }
 
 export async function hydrateStateFromSupabase() {
@@ -120,7 +145,10 @@ export async function hydrateStateFromSupabase() {
         status: payment.status,
         approved_by: payment.approved_by ?? null,
         decision_note: payment.decision_note ?? null,
-        transaction_ref: payment.transaction_ref
+        transaction_ref: payment.transaction_ref,
+        plan: payment.plan ?? undefined,
+        network: payment.network ?? null,
+        device: payment.device ?? null
       }) as PaymentRecord & { transaction_ref: string });
     }
 
@@ -131,7 +159,9 @@ export async function hydrateStateFromSupabase() {
         plan: subscription.plan,
         start_date: subscription.start_date,
         expiry_date: subscription.expiry_date,
-        status: subscription.status
+        status: subscription.status,
+        demo_link: subscription.demo_link ?? null,
+        demo_token_hash: subscription.demo_token_hash ?? null
       }));
     }
 
@@ -151,10 +181,7 @@ export async function hydrateStateFromSupabase() {
 }
 
 async function syncUserToSupabase(user: UserRecord) {
-  if (!isSupabaseReady) {
-    return;
-  }
-
+  if (!isSupabaseReady) return;
   try {
     const supabase = getSupabase();
     const { error } = await withTimeout(Promise.resolve(supabase.from('users').upsert({
@@ -174,10 +201,7 @@ async function syncUserToSupabase(user: UserRecord) {
 }
 
 async function syncPaymentToSupabase(payment: PaymentRecord & { transaction_ref: string }) {
-  if (!isSupabaseReady) {
-    return;
-  }
-
+  if (!isSupabaseReady) return;
   try {
     const supabase = getSupabase();
     const { error } = await withTimeout(Promise.resolve(supabase.from('payments').upsert({
@@ -192,6 +216,8 @@ async function syncPaymentToSupabase(payment: PaymentRecord & { transaction_ref:
       decision_note: payment.decision_note,
       transaction_ref: payment.transaction_ref,
       plan: payment.plan,
+      network: payment.network ?? null,
+      device: payment.device ?? null,
       created_at: payment.submitted_at
     }, { onConflict: 'transaction_ref' })), 12_000, 'supabase_payment_upsert');
     if (error) throw new Error(error.message);
@@ -201,10 +227,7 @@ async function syncPaymentToSupabase(payment: PaymentRecord & { transaction_ref:
 }
 
 async function syncSubscriptionToSupabase(subscription: SubscriptionRecord) {
-  if (!isSupabaseReady) {
-    return;
-  }
-
+  if (!isSupabaseReady) return;
   try {
     const supabase = getSupabase();
     await supabase.from('subscriptions').upsert({
@@ -214,8 +237,10 @@ async function syncSubscriptionToSupabase(subscription: SubscriptionRecord) {
       start_date: subscription.start_date,
       expiry_date: subscription.expiry_date,
       status: subscription.status,
+      demo_link: subscription.demo_link ?? null,
+      demo_token_hash: subscription.demo_token_hash ?? null,
       created_at: subscription.start_date,
-      updated_at: subscription.start_date
+      updated_at: new Date().toISOString()
     }, { onConflict: 'id' });
   } catch {
     // Ignore optional Supabase sync failures so the in-memory flow stays usable.
@@ -223,10 +248,7 @@ async function syncSubscriptionToSupabase(subscription: SubscriptionRecord) {
 }
 
 async function syncActivityLogToSupabase(log: ActivityLogRecord) {
-  if (!isSupabaseReady) {
-    return;
-  }
-
+  if (!isSupabaseReady) return;
   try {
     const supabase = getSupabase();
     await supabase.from('activity_logs').insert({
@@ -295,6 +317,7 @@ const ensureSeedData = () => {
 
 export function getDashboardSnapshot() {
   ensureSeedData();
+  expireOutdatedSubscriptions();
 
   const stats = {
     totalUsers: state.users.length,
@@ -322,7 +345,6 @@ export function upsertUser(telegramUser: {
   lastName?: string | null;
 }) {
   ensureSeedData();
-
   const existing = state.users.find((user) => user.telegram_id === telegramUser.telegramId);
   if (existing) {
     const updated = {
@@ -332,7 +354,6 @@ export function upsertUser(telegramUser: {
       last_name: telegramUser.lastName ?? existing.last_name,
       updated_at: new Date().toISOString()
     };
-
     const index = state.users.findIndex((user) => user.id === existing.id);
     state.users[index] = updated;
     void syncUserToSupabase(updated);
@@ -349,7 +370,6 @@ export function upsertUser(telegramUser: {
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString()
   };
-
   state.users.push(user);
   void syncUserToSupabase(user);
   return user;
@@ -365,9 +385,10 @@ export async function createPaymentSubmission(input: {
   paymentMethod: string;
   transactionRef: string;
   paymentProof?: string | null;
+  network?: string | null;
+  device?: string | null;
 }) {
   ensureSeedData();
-
   const plan = input.plan as PlanName;
   const planConfig = PLANS[plan];
   if (!planConfig) {
@@ -381,12 +402,9 @@ export async function createPaymentSubmission(input: {
     lastName: input.lastName
   });
 
-  await syncUserToSupabase(user);
-
   const existingPending = state.payments.find(
-    (payment) => payment.user_id === user.id && payment.status === 'pending'
+    (p) => p.transaction_ref === input.transactionRef && p.status === 'pending'
   );
-
   if (existingPending) {
     return { ok: true, payment: existingPending, user, duplicate: true };
   }
@@ -402,10 +420,12 @@ export async function createPaymentSubmission(input: {
     approved_by: null,
     decision_note: null,
     transaction_ref: input.transactionRef,
-    plan
+    plan,
+    network: input.network ?? null,
+    device: input.device ?? null
   };
-
   state.payments.push(payment);
+
   const activityLog: ActivityLogRecord = {
     id: randomUUID(),
     user_id: user.id,
@@ -418,13 +438,15 @@ export async function createPaymentSubmission(input: {
 
   await syncPaymentToSupabase(payment);
   await syncActivityLogToSupabase(activityLog);
-
   return { ok: true, payment, user, duplicate: false };
 }
 
-export async function updatePaymentDecision(paymentId: string, decision: 'approved' | 'rejected', adminId: string | null) {
+export async function updatePaymentDecision(
+  paymentId: string,
+  decision: 'approved' | 'rejected',
+  adminId: string | null
+) {
   ensureSeedData();
-
   const paymentIndex = state.payments.findIndex((payment) => payment.id === paymentId);
   if (paymentIndex === -1) {
     throw new Error('Payment not found.');
@@ -435,37 +457,44 @@ export async function updatePaymentDecision(paymentId: string, decision: 'approv
     throw new Error('This payment has already been processed.');
   }
 
-  payment.status = decision;
-  payment.approved_by = adminId;
-  payment.decision_note = decision === 'approved' ? 'Approved by admin' : 'Rejected by admin';
-
   const user = state.users.find((entry) => entry.id === payment.user_id);
   if (!user) {
     throw new Error('User record not found for this payment.');
   }
 
+  payment.status = decision;
+  payment.approved_by = adminId;
+  payment.decision_note = decision === 'approved' ? 'Approved by admin' : 'Rejected by admin';
+
+  let demoLink: string | null = null;
   if (decision === 'approved') {
+    expireOutdatedSubscriptions();
     const plan = (payment.plan ?? 'monthly') as PlanName;
     const planConfig = PLANS[plan] ?? PLANS.monthly;
-
-    const alreadyActive = state.subscriptions.some(
-      (subscription) => subscription.user_id === user.id && subscription.status === 'active'
+    const existingActive = state.subscriptions.find(
+      (sub) => sub.user_id === user.id && sub.status === 'active'
     );
-
-    if (!alreadyActive) {
-      const now = new Date();
-      const expiry = new Date(now.getTime() + planConfig.durationMs);
-      const subscription: SubscriptionRecord = {
-        id: randomUUID(),
-        user_id: user.id,
-        plan,
-        start_date: now.toISOString(),
-        expiry_date: expiry.toISOString(),
-        status: 'active'
-      };
-      state.subscriptions.push(subscription);
-      await syncSubscriptionToSupabase(subscription);
+    if (existingActive) {
+      throw new Error('User already has an active subscription.');
     }
+
+    const now = new Date();
+    const expiry = new Date(now.getTime() + planConfig.durationMs);
+    const creds = generateDemoDnsCredentials(payment.network === 'safaricom' ? 'safari-pro' : 'ethio-pro');
+    demoLink = creds.demoLink;
+
+    const subscription: SubscriptionRecord = {
+      id: randomUUID(),
+      user_id: user.id,
+      plan,
+      start_date: now.toISOString(),
+      expiry_date: expiry.toISOString(),
+      status: 'active',
+      demo_link: creds.demoLink,
+      demo_token_hash: creds.tokenHash
+    };
+    state.subscriptions.push(subscription);
+    await syncSubscriptionToSupabase(subscription);
   }
 
   const activityLog: ActivityLogRecord = {
@@ -482,20 +511,32 @@ export async function updatePaymentDecision(paymentId: string, decision: 'approv
   await syncActivityLogToSupabase(activityLog);
 
   if (env.TELEGRAM_BOT_TOKEN && user.telegram_id) {
-    const text = decision === 'approved'
-      ? `Payment approved.\nPlan: ${payment.plan ?? 'subscription'}\nStart: ${state.subscriptions.find(s => s.user_id === user.id && s.status === 'active')?.start_date ?? ''}\nExpiry: ${state.subscriptions.find(s => s.user_id === user.id && s.status === 'active')?.expiry_date ?? ''}`
-      : 'Your payment was rejected.';
+    const activeSub = state.subscriptions.find((s) => s.user_id === user.id && s.status === 'active');
+    const text =
+      decision === 'approved'
+        ? `✅ <b>Payment Approved!</b>\n\n` +
+          `📦 <b>Plan:</b> ${String(payment.plan ?? 'monthly').toUpperCase()}\n` +
+          `🌐 <b>Your Demo Access Link:</b>\n<code>${demoLink}</code>\n\n` +
+          `⏳ <b>Expires:</b> ${activeSub ? new Date(activeSub.expiry_date).toUTCString() : ''}\n\n` +
+          `<i>Note: This is a demo access link for testing your NEXBOOST configuration.</i>`
+        : `❌ <b>Payment Rejected</b>\n\nYour payment reference <code>${payment.transaction_ref}</code> could not be verified. Please check your receipt and resubmit in NEXBOOST.`;
+
     void fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: user.telegram_id, text })
+      body: JSON.stringify({
+        chat_id: user.telegram_id,
+        text,
+        parse_mode: 'HTML'
+      })
     });
   }
 
   return {
     ok: true,
     payment,
-    user
+    user,
+    demoLink
   };
 }
 
@@ -509,7 +550,6 @@ export const notifyTelegramAdmins = async (
   }
 
   const adminIds = getAdminChatIds();
-
   if (adminIds.length === 0) {
     return { ok: false, reason: 'No admin chat IDs configured.' };
   }
@@ -517,41 +557,33 @@ export const notifyTelegramAdmins = async (
   const replyMarkup = paymentId
     ? {
         inline_keyboard: [[
-          { text: 'Approve', callback_data: `approve:${paymentId}` },
-          { text: 'Reject', callback_data: `reject:${paymentId}` }
+          { text: '✅ Approve & Send Demo DNS', callback_data: `approve:${paymentId}` },
+          { text: '❌ Reject Payment', callback_data: `reject:${paymentId}` }
         ]]
       }
     : undefined;
 
-  // The Mini App sends screenshots as Base64 data URLs.
   const imageMatch = paymentProof?.match(
-    /^data:(image\/(?:jpeg|png));base64,([A-Za-z0-9+/=\s]+)$/
+    /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=\s]+)$/
   );
 
   const requests = adminIds.map(async (chatId) => {
     let response: Response;
-
     if (imageMatch) {
       const mimeType = imageMatch[1];
       const base64Data = imageMatch[2].replace(/\s/g, '');
       const imageBuffer = Buffer.from(base64Data, 'base64');
-
       const form = new FormData();
       form.append('chat_id', chatId);
       form.append('photo', new Blob([imageBuffer], { type: mimeType }), 'payment-proof.jpg');
       form.append('caption', message);
       form.append('parse_mode', 'HTML');
-
       if (replyMarkup) {
         form.append('reply_markup', JSON.stringify(replyMarkup));
       }
-
       response = await fetch(
         `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendPhoto`,
-        {
-          method: 'POST',
-          body: form
-        }
+        { method: 'POST', body: form }
       );
     } else {
       response = await fetch(
@@ -573,12 +605,10 @@ export const notifyTelegramAdmins = async (
       const errorBody = await response.text();
       console.error(`Telegram admin notification failed for ${chatId}:`, errorBody);
     }
-
     return response.ok;
   });
 
   const results = await Promise.all(requests);
-
   return {
     ok: results.every(Boolean),
     sent: results.filter(Boolean).length,
@@ -593,35 +623,39 @@ export async function activateTrialForUser(input: {
   lastName?: string | null;
 }) {
   ensureSeedData();
-
+  expireOutdatedSubscriptions();
   const user = upsertUser(input);
+
+  const trialAlreadyClaimed = state.subscriptions.some(
+    (sub) => sub.user_id === user.id && sub.plan === 'trial'
+  );
+  if (trialAlreadyClaimed) {
+    throw new Error('Free trial has already been claimed for this Telegram account.');
+  }
+
   const now = new Date();
   const expiry = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  const creds = generateDemoDnsCredentials('ethio-trial');
 
-  const trialExists = state.subscriptions.some(
-    (subscription) => subscription.user_id === user.id && subscription.status === 'trial'
-  );
-
-  let subscription: SubscriptionRecord | undefined;
-  if (!trialExists) {
-    subscription = {
-      id: randomUUID(),
-      user_id: user.id,
-      plan: 'trial',
-      start_date: now.toISOString(),
-      expiry_date: expiry.toISOString(),
-      status: 'trial'
-    };
-    state.subscriptions.push(subscription);
-    await syncSubscriptionToSupabase(subscription);
-  }
+  const subscription: SubscriptionRecord = {
+    id: randomUUID(),
+    user_id: user.id,
+    plan: 'trial',
+    start_date: now.toISOString(),
+    expiry_date: expiry.toISOString(),
+    status: 'trial',
+    demo_link: creds.demoLink,
+    demo_token_hash: creds.tokenHash
+  };
+  state.subscriptions.push(subscription);
+  await syncSubscriptionToSupabase(subscription);
 
   const activityLog: ActivityLogRecord = {
     id: randomUUID(),
     user_id: user.id,
     admin_id: null,
     action: 'free_trial_activated',
-    details: '24h free trial activated for customer.',
+    details: '24h demo free trial activated.',
     created_at: now.toISOString()
   };
   state.activityLogs.push(activityLog);
@@ -634,7 +668,160 @@ export async function activateTrialForUser(input: {
       plan: 'trial',
       startDate: now.toISOString(),
       expiryDate: expiry.toISOString(),
-      status: 'trial'
+      status: 'trial',
+      demoLink: creds.demoLink
     }
   };
+}
+
+export function getAdminOverview() {
+  ensureSeedData();
+  expireOutdatedSubscriptions();
+
+  const usersWithStatus = state.users.map((u) => {
+    const latestSub = [...state.subscriptions]
+      .filter((s) => s.user_id === u.id)
+      .sort((a, b) => new Date(b.expiry_date).getTime() - new Date(a.expiry_date).getTime())[0];
+    return {
+      ...u,
+      subStatus: latestSub ? latestSub.status : 'none'
+    };
+  });
+
+  return {
+    totalUsers: state.users.length,
+    pendingPayments: state.payments.filter((p) => p.status === 'pending').length,
+    approvedPayments: state.payments.filter((p) => p.status === 'approved').length,
+    rejectedPayments: state.payments.filter((p) => p.status === 'rejected').length,
+    activeDns: state.subscriptions.filter((s) => s.status === 'active' || s.status === 'trial').length,
+    users: usersWithStatus
+  };
+}
+
+export function getPaymentsByStatus(status: PaymentStatus) {
+  ensureSeedData();
+  return state.payments
+    .filter((p) => p.status === status)
+    .sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime())
+    .map((p) => ({
+      ...p,
+      user: state.users.find((u) => u.id === p.user_id) ?? null
+    }));
+}
+
+export function getDemoDnsList(filter: 'active' | 'expired' | 'revoked') {
+  ensureSeedData();
+  expireOutdatedSubscriptions();
+
+  return state.subscriptions
+    .filter((sub) => {
+      if (filter === 'active') return sub.status === 'active' || sub.status === 'trial';
+      return sub.status === filter;
+    })
+    .map((sub) => ({
+      ...sub,
+      demoLink: sub.demo_link ?? null,
+      user: state.users.find((u) => u.id === sub.user_id) ?? null
+    }));
+}
+
+export async function issueOrResendDemoDnsForUser(userId: string, _adminId: string) {
+  const user = state.users.find((u) => u.id === userId);
+  if (!user) throw new Error('User not found.');
+
+  const sub = [...state.subscriptions]
+    .filter((s) => s.user_id === user.id && (s.status === 'active' || s.status === 'trial'))
+    .sort((a, b) => new Date(b.expiry_date).getTime() - new Date(a.expiry_date).getTime())[0];
+  if (!sub) {
+    throw new Error('User does not have an active subscription or trial.');
+  }
+
+  const creds = generateDemoDnsCredentials('ethio-demo');
+  sub.demo_link = creds.demoLink;
+  sub.demo_token_hash = creds.tokenHash;
+  await syncSubscriptionToSupabase(sub);
+
+  if (env.TELEGRAM_BOT_TOKEN && user.telegram_id) {
+    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: user.telegram_id,
+        text: `🌐 <b>Your Demo Access Link:</b>\n<code>${creds.demoLink}</code>\n\n⏳ <b>Expires:</b> ${new Date(sub.expiry_date).toUTCString()}`,
+        parse_mode: 'HTML'
+      })
+    });
+  }
+
+  return { ok: true, demoLink: creds.demoLink };
+}
+
+export async function renewSubscriptionForUser(userId: string, plan: PlanName, _adminId: string) {
+  const user = state.users.find((u) => u.id === userId);
+  if (!user) throw new Error('User not found.');
+
+  const planConfig = PLANS[plan] ?? PLANS.monthly;
+  const now = new Date();
+  const expiry = new Date(now.getTime() + planConfig.durationMs);
+  const creds = generateDemoDnsCredentials('ethio-pro');
+
+  const subscription: SubscriptionRecord = {
+    id: randomUUID(),
+    user_id: user.id,
+    plan,
+    start_date: now.toISOString(),
+    expiry_date: expiry.toISOString(),
+    status: 'active',
+    demo_link: creds.demoLink,
+    demo_token_hash: creds.tokenHash
+  };
+  state.subscriptions.push(subscription);
+  await syncSubscriptionToSupabase(subscription);
+
+  if (env.TELEGRAM_BOT_TOKEN && user.telegram_id) {
+    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: user.telegram_id,
+        text: `🔄 <b>Subscription Renewed!</b>\n\n🌐 <b>New Demo Link:</b>\n<code>${creds.demoLink}</code>\n⏳ <b>Expires:</b> ${expiry.toUTCString()}`,
+        parse_mode: 'HTML'
+      })
+    });
+  }
+
+  return { ok: true, demoLink: creds.demoLink };
+}
+
+export async function revokeDemoDnsForUser(userId: string, _adminId: string) {
+  const user = state.users.find((u) => u.id === userId);
+  if (!user) throw new Error('User not found.');
+
+  let revokedCount = 0;
+  for (const sub of state.subscriptions) {
+    if (sub.user_id === user.id && (sub.status === 'active' || sub.status === 'trial')) {
+      sub.status = 'revoked';
+      sub.demo_link = null;
+      sub.demo_token_hash = null;
+      await syncSubscriptionToSupabase(sub);
+      revokedCount++;
+    }
+  }
+
+  if (revokedCount === 0) {
+    throw new Error('No active Demo DNS found to revoke.');
+  }
+
+  if (env.TELEGRAM_BOT_TOKEN && user.telegram_id) {
+    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: user.telegram_id,
+        text: '🚫 Your NEXBOOST demo access has been revoked by an administrator.'
+      })
+    });
+  }
+
+  return { ok: true };
 }
